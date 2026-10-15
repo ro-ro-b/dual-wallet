@@ -775,7 +775,7 @@ describe("runtime authorization", () => {
       call("programme.runtime.authorize", {
         operation: "case.open",
         operation_id: "case-op-0001",
-        target: { object_id: UNIT_A },
+        target: { object_id: UNIT_A, case_id: "clm-0123456789abcdef" },
         request_hash: hash,
       }),
     ).rejects.toMatchObject({ code: "user_cancelled" });
@@ -783,9 +783,89 @@ describe("runtime authorization", () => {
       kind: "runtime",
       operation: "case.open",
       product: { objectId: UNIT_A, name: "Arc grinder aa" },
+      caseId: "clm-0123456789abcdef",
     });
     expect(handlerSet.mintAssertion).not.toHaveBeenCalled();
   });
+
+  // contract r10: case.open opens the case Studio prepared for the unit; the
+  // face (1.0.0 caseStep) names it exactly as it read it with case.read.
+  it("opens the prepared case the face names: dialog, journal begin, then the mint", async () => {
+    const order: string[] = [];
+    const handlerSet = handlers({
+      journal: jest.fn(async (request: JournalTransitionRequest) => {
+        order.push(`journal:${request.transition}`);
+        return {};
+      }),
+      confirm: jest.fn(async () => {
+        order.push("confirm");
+        return true;
+      }),
+      mintAssertion: jest.fn(async () => {
+        order.push("mint");
+        return "header.claims.signature";
+      }),
+    });
+    const { call, contextId } = await selected(handlerSet);
+    const target = { object_id: UNIT_A, case_id: "clm-0123456789abcdef" };
+    await expect(
+      call("programme.runtime.authorize", {
+        operation: "case.open",
+        operation_id: "case-0123456789abcdef0123",
+        target,
+        request_hash: hash,
+      }),
+    ).resolves.toEqual({ assertion: "header.claims.signature" });
+    expect(order).toEqual([
+      "journal:begin",
+      "confirm",
+      "journal:confirm",
+      "mint",
+    ]);
+    expect(handlerSet.journal).toHaveBeenNthCalledWith(1, {
+      transition: "begin",
+      kind: "runtime",
+      operation: "case.open",
+      operation_id: "case-0123456789abcdef0123",
+      object_id: UNIT_A,
+      context_id: contextId,
+      case_id: "clm-0123456789abcdef",
+    });
+    expect(handlerSet.mintAssertion).toHaveBeenCalledWith({
+      operation: "case.open",
+      operation_id: "case-0123456789abcdef0123",
+      target,
+      request_hash: hash,
+      context_id: contextId,
+    });
+  });
+
+  it.each([
+    ["without a case", { object_id: UNIT_A }],
+    ["with a malformed case id", { object_id: UNIT_A, case_id: "clm 01" }],
+    ["with a non-string case id", { object_id: UNIT_A, case_id: 7 }],
+    [
+      "with an extra target key",
+      { object_id: UNIT_A, case_id: "clm-0123456789abcdef", amount: "1.00" },
+    ],
+    ["without a unit", { case_id: "clm-0123456789abcdef" }],
+  ])(
+    "refuses case.open %s before any dialog, journal or mint",
+    async (_label, target) => {
+      const { call, handlers: handlerSet } = await selected();
+      await expect(
+        call("programme.runtime.authorize", {
+          operation: "case.open",
+          operation_id: "case-op-0002",
+          target,
+          request_hash: hash,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_request" });
+      expect(handlerSet.journal).not.toHaveBeenCalled();
+      expect(handlerSet.confirm).not.toHaveBeenCalled();
+      expect(handlerSet.mintAssertion).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses a quote decision whose quote differs from the host-read quote", async () => {
     const quote = {

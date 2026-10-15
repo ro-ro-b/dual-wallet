@@ -639,10 +639,15 @@ export function isQuoteOperation(operation: RuntimeOperation) {
   );
 }
 
-/** Operations whose target names a case as well as the product. */
+/**
+ * Operations whose target names a case as well as the product. contract r10
+ * linked cases: case.open opens the case Studio prepared for the holder's
+ * unit, so its target is exactly {object_id, case_id}; it never creates one.
+ */
 export function runtimeOperationNeedsCase(operation: RuntimeOperation) {
   return (
     operation === "case.read" ||
+    operation === "case.open" ||
     operation === "case.evidence.submit" ||
     operation === "case.information.provide" ||
     operation === "case.quote.approve" ||

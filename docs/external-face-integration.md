@@ -648,6 +648,13 @@ the notice is not shown. The face receives `settle_proposal_unavailable`.
 Status stays `ownership_moved_state_pending` until the
 readback shows a settled state with an agreeing lifecycle target.
 
+**Case targets (contract r10).** Every case write names its case: `case.open`
+opens the case Studio prepared for the holder's unit (it never creates one),
+so its target is exactly `{object_id, case_id}`, like `case.read`,
+`case.evidence.submit` and `case.information.provide`. A case write without a
+well-formed case id is `invalid_request` in the bridge, the journal begin and
+the mint, before any confirmation or request.
+
 **Quotes.** Before `case.quote.approve` or `case.quote.decline` the BFF reads
 `case.read` itself, records a hash of the quote in the journal and the confirmation
 shows quote version, provider (labelled as from the publisher), the exact
