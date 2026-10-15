@@ -2300,6 +2300,70 @@ describe("launch retention during ordinary result-page navigation (one session)"
     }
   });
 
+  // The launches' last writes may share one millisecond (back-to-back
+  // writes): within a rank the oldest-created launch still goes first.
+  it.each([
+    ["all in one millisecond", [0, 0, 0, 0]],
+    ["the two oldest in one millisecond", [0, 0, 5, 10]],
+    ["the two newest in one millisecond", [0, 5, 10, 10]],
+    ["each in its own millisecond", [0, 5, 10, 15]],
+  ])(
+    "evicts the oldest unresolved launch when its last write is %s, never newer evidence",
+    async (_label, offsets) => {
+      const ids = [
+        "register-op-0601",
+        "register-op-0602",
+        "register-op-0603",
+        "register-op-0604",
+      ];
+      const runtime = runtimeRegistrationStatus(
+        Object.fromEntries(
+          ids.map((id) => [
+            id,
+            runtimeAnswered(id, "ownership_moved_state_pending"),
+          ]),
+        ),
+      );
+      jest
+        .mocked(verifyFaceArtifact)
+        .mockImplementation(async () => ({ ok: true }));
+      const browser = new Browser();
+      let restore = () => {};
+      const T = Date.now();
+      const clock = jest.spyOn(Date, "now");
+      try {
+        const evidence: string[] = [];
+        for (const [index, id] of ids.entries()) {
+          clock.mockReturnValue(T + offsets[index]);
+          browser.launchId = launchId(300 + index);
+          await issueRegistration(browser, id);
+          evidence.push(`dual_face_launch_${browser.launchId}`);
+        }
+        clock.mockRestore();
+        restore = hostClient(browser);
+        getObjectByIdPublic.mockResolvedValue(
+          smartObject(UNIT, HOLDER, { state: "Transfer pending" }),
+        );
+        // An empty mount reading the newest registration: one slot too few.
+        const status = await mountResultPage(browser, launchId(400), ids[3]);
+        expect(status).toMatchObject({ objectId: UNIT });
+        expect(launchCookies(browser).length).toBe(MAX_FACE_LAUNCHES);
+        expect(browser.cookies.has(evidence[0])).toBe(false);
+        for (const name of evidence.slice(1))
+          expect(browser.cookies.has(name)).toBe(true);
+      } finally {
+        clock.mockRestore();
+        restore();
+        runtime.restore();
+        jest
+          .mocked(verifyFaceArtifact)
+          .mockImplementation(
+            jest.requireActual("@/api/face-artifact").verifyFaceArtifact,
+          );
+      }
+    },
+  );
+
   it("stays bounded: with more unresolved registrations than slots the oldest goes first, empty launches before any of them, and another account still clears them", async () => {
     const ids = [
       "register-op-0591",

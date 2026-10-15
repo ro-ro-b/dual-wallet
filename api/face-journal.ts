@@ -339,9 +339,12 @@ export function writeFaceJournal(
   // re-sealed). Anything else (unreadable, another wallet's, an earlier
   // session's without such history) is dropped; within the budget the
   // least worth keeping goes first (retentionRank), the oldest within a rank.
+  // Two launches last written in the same millisecond are ordered by the
+  // request: a browser sends its cookies oldest-created first (RFC 6265
+  // 5.4; an update keeps its place), so the later one is the newer.
   const others = launchCookies(request)
     .filter(([launchId]) => launchId !== scope.launchId)
-    .map(([launchId, value]) => {
+    .map(([launchId, value], order) => {
       const opened = openLaunch(launchId, value);
       const kept =
         opened?.wallet === scope.owner.walletId &&
@@ -351,9 +354,15 @@ export function writeFaceJournal(
         launchId,
         at: kept && typeof opened.at === "number" ? opened.at : -1,
         rank: kept ? retentionRank(opened, now) : -1,
+        order,
       };
     })
-    .sort((left, right) => right.rank - left.rank || right.at - left.at);
+    .sort(
+      (left, right) =>
+        right.rank - left.rank ||
+        right.at - left.at ||
+        right.order - left.order,
+    );
   others.forEach((other, index) => {
     if (other.at < 0 || index >= MAX_FACE_LAUNCHES - 1) {
       response.cookies.set(
