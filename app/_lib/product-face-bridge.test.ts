@@ -870,7 +870,7 @@ describe("runtime authorization", () => {
   it("refuses a quote decision whose quote differs from the host-read quote", async () => {
     const quote = {
       caseId: "case-1",
-      quoteVersion: "q2",
+      quoteVersion: 2,
       provider: "Morrow Service Centre",
       amount: "149.90",
       currency: "EUR",
@@ -884,7 +884,7 @@ describe("runtime authorization", () => {
     const target = {
       object_id: UNIT_A,
       case_id: "case-1",
-      quote_version: "q1",
+      quote_version: 1,
       amount: "99.00",
       currency: "EUR",
     };
@@ -901,14 +901,96 @@ describe("runtime authorization", () => {
       call("programme.runtime.authorize", {
         operation: "case.quote.approve",
         operation_id: "quote-op-0002",
-        target: { ...target, quote_version: "q2", amount: "149.90" },
+        target: { ...target, quote_version: 2, amount: "149.90" },
         request_hash: hash,
       }),
     ).resolves.toEqual({ assertion: "header.claims.signature" });
     expect(handlerSet.confirm).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "runtime", quote }),
     );
+    // The assertion binds the runtime's integer version exactly as the face sent it.
+    expect(handlerSet.mintAssertion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { ...target, quote_version: 2, amount: "149.90" },
+      }),
+    );
   });
+
+  // contract r10: a decision binds {case_id, quote_version, amount, currency}
+  // to the quote the host read itself; quote_version is the runtime's integer.
+  const authoritative = {
+    caseId: "case-1",
+    quoteVersion: 2,
+    provider: "Morrow Service Centre",
+    amount: "149.90",
+    currency: "EUR",
+  };
+  const decision = {
+    object_id: UNIT_A,
+    case_id: "case-1",
+    quote_version: 2,
+    amount: "149.90",
+    currency: "EUR",
+  };
+
+  it.each([
+    ["a stale version", { quote_version: 1 }],
+    ["a stale amount", { amount: "149.91" }],
+    ["another currency", { currency: "USD" }],
+  ])(
+    "refuses a quote decision with %s against the host-read quote: quote_changed, cancelled, never confirmed or minted",
+    async (_label, change) => {
+      const handlerSet = handlers({
+        journal: jest.fn(async (request) =>
+          request.transition === "begin" ? { quote: authoritative } : {},
+        ),
+      });
+      const { call } = await selected(handlerSet);
+      await expect(
+        call("programme.runtime.authorize", {
+          operation: "case.quote.approve",
+          operation_id: "quote-op-0003",
+          target: { ...decision, ...change },
+          request_hash: hash,
+        }),
+      ).rejects.toMatchObject({ code: "quote_changed" });
+      expect(handlerSet.journal).toHaveBeenCalledWith(
+        expect.objectContaining({ transition: "cancel" }),
+      );
+      expect(handlerSet.confirm).not.toHaveBeenCalled();
+      expect(handlerSet.mintAssertion).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["a string", "2"],
+    ["a non-numeric label", "q2"],
+    ["zero", 0],
+    ["a negative number", -1],
+    ["a fraction", 1.5],
+    ["NaN", Number.NaN],
+    ["an unsafe integer", Number.MAX_SAFE_INTEGER + 1],
+    ["null", null],
+    ["a boolean", true],
+  ])(
+    "refuses a quote decision whose version is %s before any journal, dialog or mint",
+    async (_label, version) => {
+      const { call, handlers: handlerSet } = await selected();
+      for (const operation of ["case.quote.approve", "case.quote.decline"]) {
+        await expect(
+          call("programme.runtime.authorize", {
+            operation,
+            operation_id: "quote-op-0004",
+            target: { ...decision, quote_version: version },
+            request_hash: hash,
+          }),
+        ).rejects.toMatchObject({ code: "invalid_request" });
+      }
+      expect(handlerSet.journal).not.toHaveBeenCalled();
+      expect(handlerSet.confirm).not.toHaveBeenCalled();
+      expect(handlerSet.mintAssertion).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("holder settle (G6)", () => {

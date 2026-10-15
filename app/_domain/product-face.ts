@@ -609,7 +609,7 @@ export function isHostOnlyRuntimeOperation(value: RuntimeOperation) {
 
 /** sha256 of the canonical {quote_version, amount, currency} a decision binds. */
 export function quoteHashInput(quote: {
-  quote_version: string;
+  quote_version: number;
   amount: string;
   currency: string;
 }) {
@@ -990,7 +990,6 @@ export function proposalHashInput(proposal: {
 
 const DECIMAL = /^(?:0|[1-9][0-9]{0,29})(?:\.[0-9]{1,18})?$/;
 const CURRENCY = /^[A-Z]{3}$/;
-const QUOTE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
 export function isDecimalAmount(value: unknown): value is string {
   return typeof value === "string" && DECIMAL.test(value);
@@ -1000,14 +999,20 @@ export function isCurrencyCode(value: unknown): value is string {
   return typeof value === "string" && CURRENCY.test(value);
 }
 
-export function isQuoteVersion(value: unknown): value is string {
-  return typeof value === "string" && QUOTE_VERSION.test(value);
+/**
+ * A linked case quote's version (contract r10, Studio product-face-cases.mjs):
+ * a positive safe integer in the runtime's case view and in a decision target,
+ * exactly as the face carries it. A string, a float or anything coerced is
+ * never a version.
+ */
+export function isQuoteVersion(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
 /** Authoritative quote facts the host read from the runtime itself. */
 export interface CaseQuote {
   caseId: string;
-  quoteVersion: string;
+  quoteVersion: number;
   provider: string;
   /** Exact decimal string; never converted through a float. */
   amount: string;

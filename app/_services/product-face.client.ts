@@ -262,7 +262,7 @@ export function writeFaceJournal(
       unit: ProgrammeUnitFacts | null;
       quote: {
         case_id: string;
-        quote_version: string;
+        quote_version: number;
         provider: string;
         amount: string;
         currency: string;

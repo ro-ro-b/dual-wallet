@@ -110,7 +110,7 @@ describe("ProductFaceConfirmationDialog", () => {
       caseId: "case-1",
       quote: {
         caseId: "case-1",
-        quoteVersion: "q2",
+        quoteVersion: 2,
         provider: "Morrow Service Centre",
         amount: "1234567.89",
         currency: "EUR",

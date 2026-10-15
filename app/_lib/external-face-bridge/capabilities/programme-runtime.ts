@@ -65,7 +65,7 @@ function parseTarget(
     ...(needsCase ? { case_id: value.case_id as string } : {}),
     ...(quote
       ? {
-          quote_version: value.quote_version as string,
+          quote_version: value.quote_version as number,
           amount: value.amount as string,
           currency: value.currency as string,
         }

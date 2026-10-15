@@ -71,7 +71,7 @@ export function sha256Hash(value: string) {
 export interface AssertionTarget {
   object_id?: string;
   case_id?: string;
-  quote_version?: string;
+  quote_version?: number;
   amount?: string;
   currency?: string;
 }

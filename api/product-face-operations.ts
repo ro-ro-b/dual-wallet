@@ -52,6 +52,7 @@ import {
   isObjectId,
   isOperationId,
   isQuoteOperation,
+  isQuoteVersion,
   isRecordId,
   isRequestHash,
   isHostOnlyRuntimeOperation,
@@ -275,7 +276,7 @@ function parseTarget(
   }
   if (quote) {
     if (
-      typeof value.quote_version !== "string" ||
+      !isQuoteVersion(value.quote_version) ||
       typeof value.amount !== "string" ||
       typeof value.currency !== "string"
     ) {

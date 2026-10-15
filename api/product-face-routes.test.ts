@@ -990,6 +990,9 @@ describe("product face BFF", () => {
     const { body } = await select(browser, UNIT);
     const original = global.fetch;
     const runtimeCalls: Array<Record<string, unknown>> = [];
+    // The runtime's case view carries its quote version as an integer
+    // (contract r10); anything else is not the contract.
+    let runtimeQuoteVersion: unknown = 2;
     global.fetch = jest.fn(async (url: string, init: RequestInit) => {
       // The linked runtime's fixed endpoint and routing header, no browser
       // Origin or cookies.
@@ -1009,7 +1012,7 @@ describe("product face BFF", () => {
           case: {
             case_id: "case-1",
             quote: {
-              quote_version: "q2",
+              quote_version: runtimeQuoteVersion,
               provider: "Morrow Service Centre",
               amount: "149.90",
               currency: "EUR",
@@ -1020,6 +1023,24 @@ describe("product face BFF", () => {
       );
     }) as unknown as typeof fetch;
     try {
+      // A case view whose quote version is not the contract's integer is
+      // never shown or bound: quote_unavailable, nothing journalled.
+      runtimeQuoteVersion = "2";
+      const unparsed = await operations(browser, {
+        transition: "begin",
+        kind: "runtime",
+        operation: "case.quote.approve",
+        operation_id: "quote-op-0000",
+        object_id: UNIT,
+        case_id: "case-1",
+        context_id: body.context_id,
+      });
+      expect(unparsed).toMatchObject({
+        status: 502,
+        body: { code: "quote_unavailable" },
+      });
+      runtimeQuoteVersion = 2;
+      runtimeCalls.length = 0;
       const begun = await operations(browser, {
         transition: "begin",
         kind: "runtime",
@@ -1031,7 +1052,7 @@ describe("product face BFF", () => {
       });
       expect(begun.body.quote).toEqual({
         case_id: "case-1",
-        quote_version: "q2",
+        quote_version: 2,
         provider: "Morrow Service Centre",
         amount: "149.90",
         currency: "EUR",
@@ -1047,16 +1068,17 @@ describe("product face BFF", () => {
         operation_id: "quote-op-0001",
         context_id: body.context_id,
       });
-      const approve = (amount: string) =>
+      const approve = (amount: string, change: Record<string, unknown> = {}) =>
         mint(browser, {
           operation: "case.quote.approve",
           operation_id: "quote-op-0001",
           target: {
             object_id: UNIT,
             case_id: "case-1",
-            quote_version: "q2",
+            quote_version: 2,
             amount,
             currency: "EUR",
+            ...change,
           },
           request_hash: `sha256:${"3".repeat(64)}`,
           context_id: body.context_id,
@@ -1065,6 +1087,20 @@ describe("product face BFF", () => {
         status: 409,
         body: { code: "quote_changed" },
       });
+      // A stale version or currency is bound to nothing: quote_changed.
+      for (const change of [{ quote_version: 1 }, { currency: "USD" }]) {
+        expect(await approve("149.90", change)).toMatchObject({
+          status: 409,
+          body: { code: "quote_changed" },
+        });
+      }
+      // A version that is not the contract's integer is not a target at all.
+      for (const quote_version of ["2", 0, 1.5, null]) {
+        expect(await approve("149.90", { quote_version })).toMatchObject({
+          status: 400,
+          body: { code: "invalid_request" },
+        });
+      }
       const approved = await approve("149.90");
       expect(approved.status).toBe(200);
       // r10: the Warranty runtime is the audience; the artifact is the face's.
