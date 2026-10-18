@@ -14,6 +14,12 @@ On a separately provisioned branded wallet whose configuration sets
 - `/products/<slug>/tickets` lists only the signed-in account's own tickets,
   with the event, time, ticket class and an honest status, a "show more"
   continuation, and a distinct unavailable state with Try again.
+- Paging keeps context: "Show more" keeps keyboard focus while it loads
+  (`aria-disabled`, pending text); reaching the last page moves focus to an
+  announced "All your tickets are shown." status; a failed later page keeps
+  the tickets already listed and focuses an alert whose Try again resumes
+  from the same continuation; an ended session offers sign-in back to the
+  list.
 - `/products/<slug>/tickets/<object id>` shows one exact ticket: event, when,
   where, ticket class, the original issue reference and entry guidance.
 - A signed-out visit, or an expired session, signs in and returns to the exact
@@ -45,6 +51,9 @@ On a separately provisioned branded wallet whose configuration sets
   existing native confirmation, registry and session scopes are untouched.
 - No dependency, generated SDK or lockfile change.
 
+Merged: the accepted Phase3 recovery-holding fix
+`3c9f3c13cab586497e43070c60b46dad095c9030` (merge `86db46c`).
+
 ## Changed paths
 
 - Host: `app/_domain/wallet-host.ts`, `api/host-configuration.ts`,
@@ -68,9 +77,15 @@ On a separately provisioned branded wallet whose configuration sets
 
 - Fixtures and mocked handlers prove the wallet's rules, not hosted behaviour
   or real Dual data. Nothing was run against live Dual, a provider or a holder.
-- Listing reads upstream pages until it finds a ticket or the last template; a
-  holder with very many non-ticket objects of the programme templates reads
-  more pages per request.
+- Listing is bounded: one Tickets request makes at most
+  `MAX_UPSTREAM_READS` (4) upstream `listObjects` reads. When they find no
+  ticket the response is an empty page **with** a continuation, which the list
+  shows as "No tickets found yet" with "Keep checking for tickets", never as
+  "no tickets". An upstream continuation that comes back within one request
+  (the one it started from included), or one longer than a ticket cursor can
+  carry, is an upstream failure (502, shown as unavailable). A cycle longer
+  than one request's budget cannot be detected statelessly; it costs at most
+  four reads per press of "Keep checking", never an automatic loop.
 - Ticket text comes from the object's custom fields as plain, bounded text. A
   brand that stores richer content gets none of it rendered.
 - **Install toolchain.** The reviewed `package-lock.json` is byte-identical

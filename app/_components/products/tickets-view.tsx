@@ -8,6 +8,7 @@ import { Alert } from "@/app/_components/design-system/alert";
 import { Button, buttonClass } from "@/app/_components/design-system/button";
 import { EmptyState } from "@/app/_components/design-system/empty-state";
 import { PageHeader } from "@/app/_components/design-system/page-header";
+import { useFocusOnMount } from "@/app/_hooks/use-focus-on-mount";
 import { newFaceLaunchId } from "@/app/_domain/product-face";
 import type { Ticket, TicketStatus } from "@/app/_domain/tickets";
 import { useTicket, useTickets } from "@/app/_hooks/use-tickets";
@@ -49,16 +50,19 @@ function TicketsFailure({
   error,
   retry,
   returnPath,
+  takeFocus = false,
 }: {
   error: unknown;
   retry: () => void;
   returnPath: string;
+  /** For a failure that replaces the control the holder just used. */
+  takeFocus?: boolean;
 }) {
   const t = useTranslations("tickets.failure");
   const failure = error instanceof TicketsError ? error.failure : "unavailable";
   if (failure === "session_expired") {
     return (
-      <Alert>
+      <Alert takeFocus={takeFocus}>
         <span>
           {t("session_expired")}{" "}
           {/* A protected route: sign-in returns to exactly this page. */}
@@ -103,6 +107,16 @@ function TicketCard({ slug, ticket }: { slug: string; ticket: Ticket }) {
   );
 }
 
+/** Announces, and takes focus for, the end of a list the holder paged to. */
+function ListComplete({ children }: { children: React.ReactNode }) {
+  const ref = useFocusOnMount<HTMLParagraphElement>();
+  return (
+    <p ref={ref} tabIndex={-1} role="status" className="ticket-list-end">
+      {children}
+    </p>
+  );
+}
+
 function TicketList({
   slug,
   programmeName,
@@ -115,7 +129,57 @@ function TicketList({
   const t = useTranslations("tickets");
   const { wallet } = useSession();
   const query = useTickets({ slug, launchId, walletId: wallet?.id });
+  // Set only by the holder's own "show more" reaching the last page, so the
+  // completion is announced (and focused) only after a load they asked for.
+  const [pagedToEnd, setPagedToEnd] = useState(false);
   const tickets = query.data?.pages.flatMap((page) => page.tickets) ?? [];
+  const loadingMore = query.isFetchingNextPage;
+  async function showMore() {
+    if (loadingMore) return;
+    const result = await query.fetchNextPage();
+    if (!result.isError && !result.hasNextPage) setPagedToEnd(true);
+  }
+  // A failed first read has nothing to show; a failed later page keeps every
+  // ticket already listed and is retried from where it stopped.
+  const firstReadFailed = query.isError && !query.data;
+  const moreFailed = query.isFetchNextPageError;
+  const more =
+    query.hasNextPage && !moreFailed ? (
+      <div className="load-more">
+        {/* aria-disabled, not disabled: the control keeps keyboard focus
+            while the next page loads. */}
+        <Button
+          variant="secondary"
+          aria-disabled={loadingMore || undefined}
+          onClick={() => void showMore()}
+        >
+          {loadingMore
+            ? t("loadingMore")
+            : tickets.length
+              ? t("loadMore")
+              : t("keepChecking")}
+        </Button>
+      </div>
+    ) : null;
+  const sessionEnded =
+    query.error instanceof TicketsError &&
+    query.error.failure === "session_expired";
+  const moreFailure = !moreFailed ? null : sessionEnded ? (
+    // An ended session is its own answer: sign in and come back here.
+    <TicketsFailure
+      error={query.error}
+      retry={() => void showMore()}
+      returnPath={`/products/${slug}/tickets`}
+      takeFocus
+    />
+  ) : (
+    <Alert takeFocus>
+      <span>{t("failure.moreUnavailable")}</span>
+      <Button variant="secondary" onClick={() => void showMore()}>
+        {t("failure.retry")}
+      </Button>
+    </Alert>
+  );
   return (
     <>
       <PageHeader
@@ -123,7 +187,7 @@ function TicketList({
         title={t("title")}
         description={t("description")}
       />
-      {query.isError ? (
+      {firstReadFailed ? (
         <TicketsFailure
           error={query.error}
           retry={() => void query.refetch()}
@@ -138,18 +202,22 @@ function TicketList({
               <TicketCard key={ticket.objectId} slug={slug} ticket={ticket} />
             ))}
           </ul>
-          {query.hasNextPage ? (
-            <div className="load-more">
-              <Button
-                variant="secondary"
-                disabled={query.isFetchingNextPage}
-                onClick={() => void query.fetchNextPage()}
-              >
-                {t("loadMore")}
-              </Button>
-            </div>
+          {moreFailure}
+          {more}
+          {pagedToEnd && !query.hasNextPage ? (
+            <ListComplete>{t("allShown")}</ListComplete>
           ) : null}
         </>
+      ) : query.hasNextPage || moreFailed ? (
+        // Nothing found in what was read so far, but the read is not
+        // finished: never "no tickets" until every page was read.
+        <>
+          <p role="status">{t("notFoundYet")}</p>
+          {moreFailure}
+          {more}
+        </>
+      ) : pagedToEnd ? (
+        <ListComplete>{t("emptyTitle")}</ListComplete>
       ) : (
         <EmptyState
           icon={TicketIcon}

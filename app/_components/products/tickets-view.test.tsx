@@ -161,6 +161,158 @@ describe("the ticket list", () => {
   });
 });
 
+describe("paging the ticket list from the keyboard", () => {
+  const SECOND = "e".repeat(24);
+
+  /** Tabs forward until `target` has focus, as a keyboard user would. */
+  async function tabTo(target: HTMLElement) {
+    for (let step = 0; step < 20 && document.activeElement !== target; step++) {
+      await userEvent.tab();
+    }
+    expect(document.activeElement).toBe(target);
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => (resolve = done));
+    return { promise, resolve };
+  }
+
+  it("keeps focus on Show more while loading, then moves it to the announced end of the list", async () => {
+    const lastPage = deferred<unknown>();
+    fetchMock
+      .mockImplementationOnce(() =>
+        json({ tickets: [wire()], next: "cursor_1" }),
+      )
+      .mockImplementationOnce(() => lastPage.promise);
+    view();
+    const more = await screen.findByRole("button", {
+      name: "Show more tickets",
+    });
+    await tabTo(more);
+    await userEvent.keyboard("{Enter}");
+
+    // Loading: the same control, still focused, says what it is doing, and
+    // pressing it again sends nothing more.
+    const pending = await screen.findByRole("button", {
+      name: "Loading more tickets…",
+    });
+    expect(pending).toBe(more);
+    expect(document.activeElement).toBe(more);
+    expect(more.getAttribute("aria-disabled")).toBe("true");
+    await userEvent.keyboard("{Enter}");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    lastPage.resolve(
+      await json({ tickets: [wire({ objectId: SECOND })], next: null }),
+    );
+    const end = await screen.findByText("All your tickets are shown.");
+    // The control is gone; focus is on the completion, not the page body.
+    expect(
+      screen.queryByRole("button", { name: /Show more|Loading more/ }),
+    ).toBeNull();
+    expect(end.getAttribute("role")).toBe("status");
+    expect(document.activeElement).toBe(end);
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+  });
+
+  it("never says 'no tickets' for a page that found none yet, and lets the holder keep checking", async () => {
+    fetchMock
+      .mockImplementationOnce(() => json({ tickets: [], next: "cursor_1" }))
+      .mockImplementationOnce(() => json({ tickets: [wire()], next: null }));
+    view();
+    expect(await screen.findByText(/No tickets found yet/)).toBeTruthy();
+    expect(screen.queryByText("No tickets in this account")).toBeNull();
+    const keepChecking = screen.getByRole("button", {
+      name: "Keep checking for tickets",
+    });
+    await tabTo(keepChecking);
+    await userEvent.keyboard("{Enter}");
+    expect(
+      await screen.findByRole("link", { name: /Harbour Night/ }),
+    ).toBeTruthy();
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/faces/morrow-home/tickets?next=cursor_1",
+    );
+    expect(document.activeElement).toBe(
+      screen.getByText("All your tickets are shown."),
+    );
+  });
+
+  it("says there are none, with focus, only once checking has reached the end", async () => {
+    fetchMock
+      .mockImplementationOnce(() => json({ tickets: [], next: "cursor_1" }))
+      .mockImplementationOnce(() => json({ tickets: [], next: null }));
+    view();
+    const keepChecking = await screen.findByRole("button", {
+      name: "Keep checking for tickets",
+    });
+    await tabTo(keepChecking);
+    await userEvent.keyboard("{Enter}");
+    const none = await screen.findByText("No tickets in this account");
+    expect(document.activeElement).toBe(none);
+    expect(screen.queryByText(/No tickets found yet/)).toBeNull();
+  });
+
+  it("keeps the tickets already shown when a later page fails, and retries from the same place", async () => {
+    fetchMock
+      .mockImplementationOnce(() =>
+        json({ tickets: [wire()], next: "cursor_1" }),
+      )
+      .mockImplementationOnce(() => json({ code: "upstream_unavailable" }, 502))
+      .mockImplementationOnce(() =>
+        json({ tickets: [wire({ objectId: SECOND })], next: null }),
+      );
+    view();
+    const more = await screen.findByRole("button", {
+      name: "Show more tickets",
+    });
+    await tabTo(more);
+    await userEvent.keyboard("{Enter}");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The tickets above are still yours");
+    // Focus moves to the failure rather than falling to the page body.
+    expect(alert.contains(document.activeElement)).toBe(true);
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    const retry = within(alert).getByRole("button", { name: "Try again" });
+    await tabTo(retry);
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getAllByRole("link")).toHaveLength(2));
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "/api/faces/morrow-home/tickets?next=cursor_1",
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByText("All your tickets are shown."),
+    );
+  });
+});
+
+describe("a session that ends while paging", () => {
+  it("offers sign-in back to the list, with focus, and keeps the tickets shown", async () => {
+    fetchMock
+      .mockImplementationOnce(() =>
+        json({ tickets: [wire()], next: "cursor_1" }),
+      )
+      .mockImplementationOnce(() => json({ code: "session_expired" }, 401));
+    view();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Show more tickets" }),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Your session has ended");
+    expect(document.activeElement).toBe(alert);
+    expect(
+      within(alert)
+        .getByRole("link", { name: "Sign in again" })
+        .getAttribute("href"),
+    ).toBe("/products/morrow-home/tickets");
+    expect(screen.getAllByRole("link", { name: /Harbour Night/ })).toHaveLength(
+      1,
+    );
+  });
+});
+
 describe("one ticket", () => {
   it("shows the event, class and entry guidance, and says admission is unavailable", async () => {
     fetchMock.mockImplementation(() => json({ ticket: wire() }));

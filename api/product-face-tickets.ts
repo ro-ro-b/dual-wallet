@@ -15,6 +15,13 @@ import {
 } from "@/app/_domain/tickets";
 
 const PAGE_SIZE = 25;
+/** Upstream list reads one Tickets request may make. */
+export const MAX_UPSTREAM_READS = 4;
+/** The longest upstream continuation a ticket cursor can carry back. */
+const MAX_UPSTREAM_NEXT = 300;
+
+/** Upstream paging that cannot make progress: a failure, never "none". */
+class UpstreamPagingError extends Error {}
 
 export type TicketReadFailure =
   TicketRefusal | "invalid_request" | "not_found" | "session_expired";
@@ -68,7 +75,19 @@ export async function listTickets(
     position = decoded;
   }
   const api = getObjectsApi(context.state.accessToken);
-  while (position.templateIndex < templates.length) {
+  // Upstream continuations already followed in this request (the one it
+  // started from included): one that comes back can never terminate.
+  const followed = new Set<string>();
+  if (position.next) followed.add(`${position.templateIndex}:${position.next}`);
+  for (let reads = 0; position.templateIndex < templates.length; reads += 1) {
+    // Bounded work per request: every read so far found nothing, so the
+    // holder gets a continuation to check further, never "no tickets".
+    if (reads === MAX_UPSTREAM_READS) {
+      return {
+        ok: true,
+        page: { tickets: [], next: encodeTicketCursor(position) },
+      };
+    }
     const templateId = templates[position.templateIndex];
     let result;
     try {
@@ -94,6 +113,15 @@ export async function listTickets(
         evaluation(context, rules),
       );
       if (evaluated.ok) tickets.push(evaluated.ticket);
+    }
+    if (result.next) {
+      if (
+        result.next.length > MAX_UPSTREAM_NEXT ||
+        followed.has(`${position.templateIndex}:${result.next}`)
+      ) {
+        throw new UpstreamPagingError();
+      }
+      followed.add(`${position.templateIndex}:${result.next}`);
     }
     const following = result.next
       ? { templateIndex: position.templateIndex, next: result.next }

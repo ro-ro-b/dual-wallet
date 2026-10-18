@@ -33,6 +33,7 @@ jest.mock("@/api/web-sdk-client", () => ({
 import { establishSessionState } from "@/api/server-session";
 import { resetWalletHostCache } from "@/api/wallet-host";
 import type { LoginOut } from "@/api/web-sdk/models/LoginOut";
+import { MAX_UPSTREAM_READS } from "@/api/product-face-tickets";
 import { GET as listGET } from "@/app/api/faces/[slug]/tickets/route";
 import { GET as detailGET } from "@/app/api/faces/[slug]/tickets/[objectId]/route";
 import { ResponseError } from "@/api/web-sdk/runtime";
@@ -382,6 +383,82 @@ describe("the ticket list", () => {
         templateId: TEMPLATE_A,
       }),
     );
+  });
+
+  describe("bounded upstream paging", () => {
+    // Objects of the programme's template that are not this holder's tickets:
+    // a large mixed programme can return many pages of them.
+    const notMine = () =>
+      object({ owner: "0x00000000000000000000000000000000000000aa" });
+
+    it("reads at most a fixed number of upstream pages per request and hands back a continuation, never 'none'", async () => {
+      configure();
+      listObjects.mockImplementation(({ next }: { next?: string }) =>
+        Promise.resolve({
+          objects: [notMine()],
+          next: `page-${Number((next ?? "page-0").slice(5)) + 1}`,
+        }),
+      );
+      const first = await list();
+      expect(first.status).toBe(200);
+      expect(listObjects).toHaveBeenCalledTimes(MAX_UPSTREAM_READS);
+      // Nothing found yet, but not the end: an empty page with a continuation.
+      expect(first.body.tickets).toEqual([]);
+      expect(first.body.next).toEqual(
+        expect.stringMatching(/^[A-Za-z0-9_-]+$/),
+      );
+
+      // The continuation resumes at exactly the next unread upstream page.
+      listObjects.mockClear();
+      listObjects.mockResolvedValueOnce({ objects: [object()], next: null });
+      const second = await list(`?next=${first.body.next}`);
+      expect(listObjects).toHaveBeenCalledTimes(1);
+      expect(listObjects.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          next: `page-${MAX_UPSTREAM_READS}`,
+          owner: HOLDER,
+          templateId: TEMPLATE_A,
+        }),
+      );
+      expect(second.body).toEqual(
+        expect.objectContaining({
+          next: null,
+          tickets: [expect.objectContaining({ objectId: TICKET })],
+        }),
+      );
+    });
+
+    it("treats an upstream continuation that repeats as unavailable, not as no tickets", async () => {
+      configure();
+      // The same page again and again.
+      listObjects.mockResolvedValue({ objects: [notMine()], next: "stuck" });
+      expect(await list()).toEqual({
+        status: 502,
+        body: expect.objectContaining({ code: "upstream_unavailable" }),
+      });
+      expect(listObjects).toHaveBeenCalledTimes(2);
+
+      // A two-page cycle: a -> b -> a.
+      listObjects.mockReset();
+      listObjects.mockImplementation(({ next }: { next?: string }) =>
+        Promise.resolve({
+          objects: [notMine()],
+          next: next === "a" ? "b" : "a",
+        }),
+      );
+      expect((await list()).status).toBe(502);
+      expect(listObjects).toHaveBeenCalledTimes(3);
+    });
+
+    it("refuses an upstream continuation too long to carry back", async () => {
+      configure();
+      listObjects.mockResolvedValue({
+        objects: [notMine()],
+        next: "x".repeat(301),
+      });
+      expect((await list()).status).toBe(502);
+      expect(listObjects).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("refuses injected query values and malformed cursors", async () => {

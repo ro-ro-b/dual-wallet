@@ -436,6 +436,10 @@
     "detailEyebrow": "Ticket",
     "loading": "Loading your tickets…",
     "loadMore": "Show more tickets",
+    "loadingMore": "Loading more tickets…",
+    "keepChecking": "Keep checking for tickets",
+    "notFoundYet": "No tickets found yet. Not everything has been checked, so this doesn't mean you have none.",
+    "allShown": "All your tickets are shown.",
     "emptyTitle": "No tickets in this account",
     "emptyDescription": "Tickets issued to this account appear here. If you expect one, check that you are signed in with the account the tickets were issued to.",
     "back": "All tickets",
@@ -466,6 +470,7 @@
       "not_found": "This ticket isn't held by your account, so it can't be shown here.",
       "capability_not_granted": "Tickets aren't available in this wallet.",
       "unavailable": "We couldn't read your tickets right now. This doesn't mean you have none.",
+      "moreUnavailable": "We couldn't read more of your tickets right now. The tickets above are still yours, and this doesn't mean there are no more.",
       "retry": "Try again"
     }
   },

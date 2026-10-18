@@ -173,7 +173,8 @@ button {
   outline: 3px solid var(--brand-strong);
   outline-offset: 2px;
 }
-.button:disabled {
+.button:disabled,
+.button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.58;
   transform: none;
@@ -1191,6 +1192,11 @@ button {
   border: 1px solid var(--border-strong);
 }
 
+.ticket-list-end {
+  margin-top: 28px;
+  color: var(--muted);
+  text-align: center;
+}
 .ticket-list {
   display: grid;
   gap: 12px;
