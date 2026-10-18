@@ -3,6 +3,7 @@
  */
 // Tickets as an opt-in journey of a branded host: the configuration, the page
 // gate, the readback and the home link. The BFF is in product-face-tickets.test.ts.
+import { NextRequest } from "next/server";
 import {
   evaluateHostConfiguration,
   type HostConfigurationInput,
@@ -13,6 +14,7 @@ import {
   hostPageAllowed,
   hostReadback,
 } from "@/api/wallet-host";
+import { proxy } from "@/proxy";
 import { edit, REMOVE } from "@/test/product-face-fixtures";
 import {
   applyHostEnvironment,
@@ -165,5 +167,56 @@ describe("a host serving tickets", () => {
       quoteDecisions: true,
       transfer: true,
     });
+  });
+});
+
+describe("tickets pages at the request proxy", () => {
+  const ID = "a".repeat(24);
+  const list = "/products/morrow-home/tickets";
+  const detail = `${list}/${ID}`;
+
+  function visit(path: string, signedIn: boolean) {
+    const { host } = new URL(MORROW_ORIGIN);
+    const response = proxy(
+      new NextRequest(`${MORROW_ORIGIN}${path}`, {
+        headers: {
+          host,
+          ...(signedIn ? { cookie: "smarttoken_viewer=sealed" } : {}),
+        },
+      }),
+    );
+    if (response instanceof Promise) throw new Error("async");
+    return response;
+  }
+  function serve(document: HostDocument, registry = withRules()) {
+    resetWalletHostCache();
+    applyHostEnvironment(
+      hostEnvironment(document, { PRODUCT_FACE_APPLICATIONS: registry }),
+    );
+  }
+
+  it("signs a signed-out visitor in and returns to the exact ticket", () => {
+    serve(ticketsOn());
+    for (const path of [list, detail]) {
+      expect(visit(path, false).headers.get("location")).toBe(
+        `${MORROW_ORIGIN}/login?next=${encodeURIComponent(path)}`,
+      );
+    }
+  });
+
+  it("reopens the same protected ticket directly when signed in", () => {
+    serve(ticketsOn());
+    expect(visit(detail, true).headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("answers not found, before any redirect, when the host did not enable Tickets", () => {
+    serve(morrowDocument(), JSON.stringify([morrowBinding()]));
+    for (const signedIn of [false, true]) {
+      const response = visit(detail, signedIn);
+      expect(response.headers.get("x-middleware-rewrite")).toBe(
+        `${MORROW_ORIGIN}/_wallet-host/not-found`,
+      );
+      expect(response.headers.get("location")).toBeNull();
+    }
   });
 });

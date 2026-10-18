@@ -14,6 +14,9 @@
   branded deployment per brand configured only by environment
   (`dual-wallet-host-configuration-v1`), journey enforcement, entrance
   isolation, fail-closed mode and readback
+- [P4 Tickets wallet handoff](./development/p4-tickets-handoff.md): the
+  opt-in read-only Tickets journey, its tests, residual risks and the backend
+  and Studio contract it needs
 - Specs:
   - [Wallet branding contract](./specs/2026-08-20-wallet-branding-design.md)
 - Evidence (development, local fakes only):
