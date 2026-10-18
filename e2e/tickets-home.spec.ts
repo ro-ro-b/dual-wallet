@@ -74,6 +74,98 @@ async function noHorizontalOverflow(page: Page) {
   ).toBeLessThanOrEqual(0);
 }
 
+interface CardGeometry {
+  title: string;
+  card: { width: number; height: number };
+  copy: {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+    width: number;
+  };
+  status: { left: number; top: number };
+  /** Rendered line boxes of each text line in the copy column. */
+  lines: number[];
+}
+
+/** The geometry of every ticket card in `scope`, as the browser laid it out. */
+async function cardGeometry(page: Page, scope: string) {
+  return page
+    .locator(scope)
+    .locator(".ticket-card")
+    .evaluateAll((cards) =>
+      cards.map((card) => {
+        const box = (element: Element) => element.getBoundingClientRect();
+        const copy = card.querySelector(".ticket-card-copy")!;
+        const status = card.querySelector(".status")!;
+        // Line boxes of a text, counted by their distinct vertical positions.
+        const lineCount = (element: Element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          return new Set(
+            Array.from(range.getClientRects()).map((rect) =>
+              Math.round(rect.top),
+            ),
+          ).size;
+        };
+        const c = box(copy);
+        return {
+          title: copy.querySelector("strong")?.textContent ?? "",
+          card: { width: box(card).width, height: box(card).height },
+          copy: {
+            left: c.left,
+            right: c.right,
+            top: c.top,
+            bottom: c.bottom,
+            width: c.width,
+          },
+          status: { left: box(status).left, top: box(status).top },
+          lines: Array.from(copy.children).map(lineCount),
+        };
+      }),
+    ) as Promise<CardGeometry[]>;
+}
+
+/**
+ * Every card keeps a readable copy column: wide, the title on one line,
+ * each detail on one line (two at phone width), a bounded height, and the
+ * status beside the copy on a wide screen or under it on a phone.
+ */
+function expectReadable(cards: CardGeometry[], phone: boolean) {
+  expect(cards.length).toBeGreaterThan(0);
+  for (const card of cards) {
+    const label = `${card.title} (${phone ? "phone" : "desktop"})`;
+    expect(card.copy.width, label).toBeGreaterThanOrEqual(
+      phone ? Math.max(150, card.card.width * 0.45) : card.card.width * 0.5,
+    );
+    expect(card.lines[0], `${label}: title lines`).toBe(1);
+    for (const lines of card.lines.slice(1)) {
+      expect(lines, `${label}: detail lines`).toBeLessThanOrEqual(
+        phone ? 2 : 1,
+      );
+    }
+    expect(card.card.height, `${label}: height`).toBeLessThanOrEqual(
+      phone ? 170 : 120,
+    );
+    if (phone) {
+      expect(
+        card.status.top,
+        `${label}: status under copy`,
+      ).toBeGreaterThanOrEqual(card.copy.bottom - 1);
+      expect(
+        Math.abs(card.status.left - card.copy.left),
+        label,
+      ).toBeLessThanOrEqual(2);
+    } else {
+      expect(
+        card.status.left,
+        `${label}: status beside copy`,
+      ).toBeGreaterThanOrEqual(card.copy.right);
+    }
+  }
+}
+
 const yourTickets = (page: Page) =>
   page.getByRole("region", { name: "Your tickets" });
 
@@ -242,6 +334,43 @@ test("at phone width the home and the ticket fit, with no horizontal scroll", as
   await noHorizontalOverflow(page);
   expect(seen.problems).toEqual([]);
   expect(seen.failedResponses).toEqual(["401 /api/session"]);
+});
+
+test("ticket cards keep a readable copy column at desktop and phone width, on the home and the full list", async ({
+  page,
+}) => {
+  const seen = watch(page);
+  await page.setViewportSize({ width: 1265, height: 900 });
+  await page.goto("/login");
+  await signIn(page);
+  await expect(
+    yourTickets(page).getByRole("region", { name: "Today" }),
+  ).toBeVisible();
+  // Today, Coming up and Needs attention: four cards on the home.
+  const home = await cardGeometry(page, "section.tickets-today");
+  expect(home.map((card) => card.title)).toEqual([
+    "Harbour Night",
+    "Lantern Walk",
+    "Pier Concert",
+    "Dawn Swim",
+  ]);
+  expectReadable(home, false);
+  await page.goto(LIST);
+  await expect(page.getByRole("link", { name: /Winter Fair/ })).toBeVisible();
+  expectReadable(await cardGeometry(page, "ul.ticket-list"), false);
+
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.goto("/");
+  await expect(
+    yourTickets(page).getByRole("region", { name: "Today" }),
+  ).toBeVisible();
+  expectReadable(await cardGeometry(page, "section.tickets-today"), true);
+  await noHorizontalOverflow(page);
+  await page.goto(LIST);
+  await expect(page.getByRole("link", { name: /Winter Fair/ })).toBeVisible();
+  expectReadable(await cardGeometry(page, "ul.ticket-list"), true);
+  await noHorizontalOverflow(page);
+  expect(seen.problems).toEqual([]);
 });
 
 test("empty-with-more and unavailable reads are never shown as no tickets", async ({

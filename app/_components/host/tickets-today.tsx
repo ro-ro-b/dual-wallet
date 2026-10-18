@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Ticket as TicketIcon } from "lucide-react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Alert } from "@/app/_components/design-system/alert";
 import { Button } from "@/app/_components/design-system/button";
@@ -87,8 +87,13 @@ function TicketLine({
     : null;
   return (
     <li>
-      {/* The link's name is its visible content: event, time and status. */}
+      {/* The link's name is its visible content: event, time and status.
+          The same four parts as the full list's card (.ticket-card is a
+          four-column grid: icon, copy, status, chevron). */}
       <Link className="card ticket-card" href={href}>
+        <span className="ticket-card-icon" aria-hidden>
+          <TicketIcon size={22} />
+        </span>
         <span className="ticket-card-copy">
           <strong>{ticket.event.title}</strong>
           {when ? <span>{when}</span> : null}
