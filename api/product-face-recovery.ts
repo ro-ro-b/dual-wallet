@@ -32,7 +32,11 @@ import {
   type FaceOperationFailure,
   type FaceOperationResult,
 } from "@/api/product-face-operations";
-import type { FaceRequestContext } from "@/api/product-face-server";
+import {
+  publicUnitFacts,
+  readPublicUnit,
+  type FaceRequestContext,
+} from "@/api/product-face-server";
 import { sealForPurpose, unsealForPurpose } from "@/api/server-session";
 import { hostJourneyEnabled } from "@/api/wallet-host";
 import {
@@ -84,6 +88,16 @@ export type RecoveredOutcome =
   | "outcome_unknown"
   | "not_checked";
 
+/**
+ * Who holds the unit of a proved transfer outcome NOW, for this wallet, from
+ * a fresh read of Dual's public projection under the binding's registration
+ * rules: this wallet, registered (`registered`); this wallet, not registered
+ * (`held`); another wallet (`elsewhere`). The outcome itself stays exactly
+ * as proved from the historical record; this only tells the host which of
+ * its present-tense words still hold.
+ */
+export type RecoveredHolding = "registered" | "held" | "elsewhere";
+
 export interface RecoveredItem {
   operationId: string;
   kind: RecoveryItem["kind"];
@@ -93,6 +107,13 @@ export interface RecoveredItem {
   offerId: string | null;
   step: RecoveryItem["step"];
   outcome: RecoveredOutcome;
+  /**
+   * Set only for a proved transfer offer, cancellation or transfer step whose
+   * unit was read afresh; null for every other item and whenever that read
+   * was unavailable, found nothing or found a unit outside the programme
+   * (the host then keeps its original line).
+   */
+  holding: RecoveredHolding | null;
   /** Present only when the item may be acknowledged (contract §4). */
   ticket: string | null;
 }
@@ -608,6 +629,48 @@ async function resolveItem(
   };
 }
 
+/**
+ * The proved outcomes whose host line says who holds the unit now: a
+ * transfer offer ("still yours until the handover is done"), its
+ * cancellation ("stays yours"), a committed request step ("the handover has
+ * not been done yet") and a completed transfer step ("now belongs to the
+ * recipient"). Registrations, settles and case writes claim nothing of it.
+ */
+function claimsHolding(item: RecoveryItem, outcome: RecoveredOutcome) {
+  if (item.kind === "transfer") {
+    return (
+      outcome === "transfer_request_committed" || outcome === "transferred"
+    );
+  }
+  return (
+    item.kind === "runtime" &&
+    outcome === "write_applied" &&
+    (item.operation === "transfer.offer" ||
+      item.operation === "transfer.cancel")
+  );
+}
+
+/**
+ * The unit's current holding for this wallet, from a fresh, uncached read of
+ * Dual's public projection. Read-only; any failure, an absent unit, a unit
+ * outside the programme or one without an owner is null, never a guess.
+ */
+async function currentHolding(
+  context: FaceRequestContext,
+  objectId: string,
+): Promise<RecoveredHolding | null> {
+  try {
+    const unit = await readPublicUnit(objectId);
+    if (!unit?.owner) return null;
+    const facts = publicUnitFacts(context, unit);
+    if (!context.binding.templateIds.includes(facts.templateId)) return null;
+    if (!facts.readback.ownerIsYou) return "elsewhere";
+    return facts.registration === "registered" ? "registered" : "held";
+  } catch {
+    return null;
+  }
+}
+
 /** The contract's stable order key: (recorded_at, operation_id) ascending. */
 interface ItemKey {
   recorded_at: string;
@@ -917,6 +980,16 @@ export async function listRecovery(
   const now = Date.now();
   const items: RecoveredItem[] = [];
   const conflicting = new Set<string>();
+  // One fresh read per unit per page, made only for the items that need it.
+  const holdings = new Map<string, Promise<RecoveredHolding | null>>();
+  const holdingOf = (objectId: string) => {
+    let read = holdings.get(objectId);
+    if (!read) {
+      read = currentHolding(context, objectId);
+      holdings.set(objectId, read);
+    }
+    return read;
+  };
   for (const { runtime, item } of page) {
     const base = {
       operationId: item.operationId,
@@ -934,7 +1007,12 @@ export async function listRecovery(
       } else if (!misrouted.has(item.operationId)) {
         unchecked += 1;
       }
-      items.push({ ...base, outcome: "not_checked", ticket: null });
+      items.push({
+        ...base,
+        outcome: "not_checked",
+        holding: null,
+        ticket: null,
+      });
       continue;
     }
     const { outcome, proof } = await resolveItem(
@@ -966,9 +1044,18 @@ export async function listRecovery(
             exp: now + TICKET_TTL_MS,
           }
         : undefined;
+    // A proved transfer outcome is historical: who holds the unit now is
+    // read afresh, so the host never tells a completed or since-reversed
+    // handover in the present tense. The outcome, its proof and its ticket
+    // stay exactly as proved.
+    const holding =
+      proof && claimsHolding(item, outcome)
+        ? await holdingOf(item.objectId)
+        : null;
     items.push({
       ...base,
       outcome,
+      holding,
       ticket: ticket ? sealForPurpose(ticketPurpose(context), ticket) : null,
     });
   }

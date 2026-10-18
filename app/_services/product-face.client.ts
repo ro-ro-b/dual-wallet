@@ -321,6 +321,13 @@ export type FaceRecoveryOutcome =
   | "not_checked";
 
 /**
+ * Who holds the unit of a proved transfer outcome now, read afresh by the
+ * BFF: this wallet with the product registered, this wallet without, or
+ * another wallet.
+ */
+export type FaceRecoveryHolding = "registered" | "held" | "elsewhere";
+
+/**
  * One of this wallet's earlier operations the runtime listed durably,
  * resolved read-only by the BFF. Only the actor's own minimal correlation
  * identifiers; never case, quote, owner or recipient content.
@@ -334,6 +341,12 @@ export interface FaceRecoveryItem {
   offer_id: string | null;
   step: "request" | "transfer" | null;
   outcome: FaceRecoveryOutcome;
+  /**
+   * Set only for a proved transfer offer, cancellation or transfer step
+   * whose unit the BFF read afresh; null otherwise, and whenever that read
+   * was unavailable (the host then keeps its original line).
+   */
+  holding: FaceRecoveryHolding | null;
   /**
    * Present ONLY for an item the host may acknowledge once the person has
    * seen it: a proved outcome, from a complete check, of an enabled journey.
@@ -434,7 +447,11 @@ export async function listFaceRecovery(
     withheld: result.withheld,
     continuation:
       typeof result.continuation === "string" ? result.continuation : null,
-    items: result.items,
+    // An answer without the fresh holding read keeps every original line.
+    items: result.items.map((item) => ({
+      ...item,
+      holding: item.holding ?? null,
+    })),
     ...(Array.isArray(result.discovered) && result.discovered.length > 0
       ? { discovered: result.discovered as string[] }
       : {}),
@@ -501,8 +518,17 @@ const recoveryOutcomes: readonly string[] = [
   "outcome_unknown",
   "not_checked",
 ] satisfies FaceRecoveryOutcome[];
+const recoveryHoldings: readonly string[] = [
+  "registered",
+  "held",
+  "elsewhere",
+] satisfies FaceRecoveryHolding[];
 
-function isFaceRecoveryItem(value: unknown): value is FaceRecoveryItem {
+/** A listed item; `holding` may be absent (read as null), never unknown. */
+function isFaceRecoveryItem(
+  value: unknown,
+): value is Omit<FaceRecoveryItem, "holding"> &
+  Partial<Pick<FaceRecoveryItem, "holding">> {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
   const nullableString = (field: unknown) =>
@@ -520,6 +546,10 @@ function isFaceRecoveryItem(value: unknown): value is FaceRecoveryItem {
       item.step === "transfer") &&
     typeof item.outcome === "string" &&
     recoveryOutcomes.includes(item.outcome) &&
+    (item.holding === undefined ||
+      item.holding === null ||
+      (typeof item.holding === "string" &&
+        recoveryHoldings.includes(item.holding))) &&
     nullableString(item.ticket)
   );
 }

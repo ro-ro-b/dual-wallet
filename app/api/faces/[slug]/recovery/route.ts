@@ -44,6 +44,7 @@ export async function GET(request: NextRequest, { params }: Params) {
         offer_id: item.offerId,
         step: item.step,
         outcome: item.outcome,
+        holding: item.holding,
         ticket: item.ticket,
       })),
       discovered: listing.discovered,

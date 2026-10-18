@@ -817,6 +817,7 @@ describe("the runtime's durable recovery listing (proposed contract r20)", () =>
     offer_id: "pto-bbbbbbbbbbbbbbbbbbbbbbbb",
     step: "transfer",
     outcome: "transferred",
+    holding: "elsewhere",
     ticket: "ack-ticket-f0a31dc6",
   };
   const heldWrite = {
@@ -828,6 +829,7 @@ describe("the runtime's durable recovery listing (proposed contract r20)", () =>
     offer_id: null,
     step: null,
     outcome: "outcome_unknown",
+    holding: null,
     ticket: null,
   };
   const retainedStep = {
@@ -958,6 +960,41 @@ describe("the runtime's durable recovery listing (proposed contract r20)", () =>
         { runtime: "product", status: "checked" },
         { runtime: "service", status: "checked" },
       ],
+    });
+  });
+
+  it("carries the BFF's fresh holding read of each item into the notice, and still acknowledges the proved outcome once dismissed", async () => {
+    // The original owner's earlier transfer, with the product back in this
+    // wallet and registered: the outcome and its ticket are as proved.
+    listFaceRecovery.mockResolvedValueOnce({
+      supported: true,
+      complete: true,
+      withheld: 0,
+      continuation: null,
+      items: [{ ...transferred, holding: "registered" }, heldWrite],
+    });
+    const { hook } = launch();
+    await act(async () => {
+      initialized?.(fakeHost);
+      await tick();
+    });
+    expect(hook.result.current.notice).toMatchObject({
+      kind: "recovery",
+      items: [
+        {
+          operationId: transferred.operation_id,
+          outcome: "transferred",
+          holding: "registered",
+          acknowledgeable: true,
+        },
+        { operationId: heldWrite.operation_id, holding: null },
+      ],
+    });
+    act(() => hook.result.current.dismissNotice());
+    expect(acknowledgeFaceRecovery).toHaveBeenCalledTimes(1);
+    expect(acknowledgeFaceRecovery).toHaveBeenCalledWith(face, {
+      operation_id: transferred.operation_id,
+      ticket: transferred.ticket,
     });
   });
 
@@ -1233,6 +1270,7 @@ describe("the runtime's durable recovery listing (proposed contract r20)", () =>
           operation: "transfer.transfer",
           step: "transfer",
           outcome: "transferred",
+          holding: "elsewhere",
           acknowledgeable: true,
         },
         {
@@ -1241,6 +1279,7 @@ describe("the runtime's durable recovery listing (proposed contract r20)", () =>
           operation: "case.open",
           step: null,
           outcome: "outcome_unknown",
+          holding: null,
           acknowledgeable: false,
         },
       ],

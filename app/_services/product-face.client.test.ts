@@ -3,6 +3,7 @@ import { signActionWithPasskey } from "@/app/_adapters/webauthn.client";
 import {
   executeSettleAction,
   forgetFaceHandoverTickets,
+  listFaceRecovery,
   loadProductFaceContext,
   readProgrammeProductHistory,
   takeFaceHandoverTicket,
@@ -336,5 +337,65 @@ describe("product history through the host", () => {
         MUG,
       ),
     ).rejects.toMatchObject({ code: "history_unavailable", status: 502 });
+  });
+});
+
+describe("the recovery listing's holding read (proposed r20)", () => {
+  const launch = { slug: "tidewell", launchId: "launch-aaaaaaaaaaaaaaaaaaaa" };
+  const realFetch = global.fetch;
+  const listed = (holding?: unknown) => ({
+    supported: true,
+    complete: true,
+    withheld: 0,
+    continuation: null,
+    items: [
+      {
+        operation_id: "xfer-f0a31dc6781e57f040c2",
+        kind: "transfer",
+        operation: "transfer.transfer",
+        object_id: "aaaaaaaaaaaaaaaaaaaaaaaa",
+        case_id: null,
+        offer_id: "pto-bbbbbbbbbbbbbbbbbbbbbbbb",
+        step: "transfer",
+        outcome: "transferred",
+        ...(holding === undefined ? {} : { holding }),
+        ticket: "ack-ticket",
+      },
+    ],
+  });
+  const answer = (body: unknown) => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => body,
+    } as Response) as unknown as typeof fetch;
+  };
+  const list = () =>
+    listFaceRecovery(
+      launch as unknown as Parameters<typeof listFaceRecovery>[0],
+    );
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  it("keeps the BFF's fresh holding, and reads an answer without one as unread", async () => {
+    for (const holding of ["registered", "held", "elsewhere", null]) {
+      answer(listed(holding));
+      expect((await list()).items[0].holding).toBe(holding);
+    }
+    answer(listed());
+    expect((await list()).items[0]).toMatchObject({
+      outcome: "transferred",
+      holding: null,
+    });
+  });
+
+  it("refuses a holding outside the vocabulary whole, as any other malformed answer", async () => {
+    for (const holding of ["yours", 1, {}]) {
+      answer(listed(holding));
+      await expect(list()).rejects.toMatchObject({
+        code: "temporarily_unavailable",
+      });
+    }
   });
 });

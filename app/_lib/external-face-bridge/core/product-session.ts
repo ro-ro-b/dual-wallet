@@ -109,6 +109,11 @@ export type ProductFaceHostNotice =
           | "write_refused"
           | "outcome_unknown"
           | "not_checked";
+        /**
+         * Who holds the unit of a proved transfer outcome now (the BFF's
+         * fresh read); null keeps the outcome's own line.
+         */
+        holding: "registered" | "held" | "elsewhere" | null;
         /** The host may acknowledge it once the person dismissed the notice. */
         acknowledgeable: boolean;
       }>;

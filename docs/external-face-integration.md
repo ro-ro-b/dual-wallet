@@ -631,6 +631,26 @@ What the host does on each face launch, after the bootstrap
   a complete scan named comes back as a discovery ticket the host hands
   straight back, which marks that entry `discoverable` (retention above) and
   frees no journal slot.
+- A proved transfer outcome is historical, but its line speaks of who holds
+  the product now (an offer: still yours until the handover is done; a
+  committed request step: the handover has not been done yet; a completed
+  transfer step: it now belongs to the recipient). For each such item (a
+  transfer offer or cancellation, a request or transfer step) the BFF reads
+  the unit afresh from Dual's public projection, uncached and once per unit
+  per page, and returns `holding`: `registered` (this wallet holds it and it
+  is registered under the binding's rules), `held` (this wallet holds it,
+  not registered), `elsewhere` (another wallet holds it), or `null` when the
+  read failed, found nothing or found a unit outside the programme. Where
+  the holding contradicts the line (a request whose product is registered
+  to you or no longer in your wallet, an offer or cancellation whose product
+  is no longer in your wallet, a transfer step whose product has since come
+  back), or cannot tell it from a handover completed since (an offer on a
+  product registered to you), the host says only what holds now; otherwise,
+  and whenever `holding` is `null`, the outcome's own line stands. An offer
+  or request whose product is in your wallet but not registered keeps its
+  line: ownership alone cannot tell one still in progress from one completed
+  and returned. The outcome, its proof and ticket, and the runtime's records
+  are unchanged: nothing is hidden, rewritten or deleted.
 - When the person dismisses the notice, the host acknowledges
   (`POST /api/faces/[slug]/recovery/ack`, `recovery.ack`) only the items whose
   outcome was proved in this launch, whose journey is enabled, and only when

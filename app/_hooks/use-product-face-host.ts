@@ -348,6 +348,7 @@ export function useProductFaceHost({
         operation: item.operation,
         step: item.step,
         outcome: item.outcome,
+        holding: item.holding,
         acknowledgeable:
           complete &&
           item.ticket !== null &&

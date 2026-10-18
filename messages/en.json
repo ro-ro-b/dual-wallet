@@ -617,6 +617,23 @@
           "transfer_offered": "Your offer to pass on a product, made earlier, was recorded. The product is still yours until the handover is done.",
           "transfer_cancelled": "Your cancellation of an offer to pass on a product, made earlier, was recorded. The product stays yours."
         },
+        "current": {
+          "transfer_offered": {
+            "registered": "Your offer to pass on a product, made earlier, was recorded. The product is registered to you now.",
+            "elsewhere": "Your offer to pass on a product, made earlier, was recorded. The product is no longer in your wallet."
+          },
+          "transfer_cancelled": {
+            "elsewhere": "Your cancellation of an offer to pass on a product, made earlier, was recorded. The product is no longer in your wallet."
+          },
+          "transfer_request_committed": {
+            "registered": "Your transfer request, made earlier, was recorded. The product is registered to you now.",
+            "elsewhere": "Your transfer request, made earlier, was recorded. The product is no longer in your wallet."
+          },
+          "transferred": {
+            "registered": "Your transfer, made earlier, is complete. The product has since come back to your wallet and is registered to you.",
+            "held": "Your transfer, made earlier, is complete. The product has since come back to your wallet."
+          }
+        },
         "any": {
           "write_refused": "A request you sent earlier was not accepted. Nothing was changed.",
           "outcome_unknown": "A request you sent earlier is still being confirmed. It will not be sent again.",

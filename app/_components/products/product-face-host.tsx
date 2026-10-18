@@ -63,6 +63,35 @@ function recoveryReasonOf(reason: string | null) {
   return recoveryReasons.find((known) => known === reason);
 }
 
+/**
+ * A recovered transfer line speaks of who holds the product now ("still
+ * yours until the handover is done", "the handover has not been done yet",
+ * "now belongs to the recipient"). Where the unit's current holding (the
+ * BFF's fresh read) contradicts those words, or cannot tell them from a
+ * handover completed since (an offer on a product registered to you), the
+ * line says only what holds now; otherwise, and whenever the holding is
+ * unread, the outcome's own line stands.
+ */
+const currentTransferLines = {
+  transfer_offered: ["registered", "elsewhere"],
+  transfer_cancelled: ["elsewhere"],
+  transfer_request_committed: ["registered", "elsewhere"],
+  transferred: ["registered", "held"],
+} as const satisfies Record<
+  string,
+  readonly NonNullable<RecoveryItem["holding"]>[]
+>;
+
+function currentLineKey(
+  line: keyof typeof currentTransferLines,
+  holding: RecoveryItem["holding"],
+) {
+  const contradicted: readonly string[] = currentTransferLines[line];
+  return holding && contradicted.includes(holding)
+    ? (`notices.recovery.current.${line}.${holding}` as const)
+    : undefined;
+}
+
 function recoveryLineKey(item: RecoveryItem) {
   switch (item.outcome) {
     case "registered":
@@ -71,15 +100,26 @@ function recoveryLineKey(item: RecoveryItem) {
         : "notices.recovery.registration.registered";
     case "transfer_request_committed":
     case "transferred":
-      return `notices.recovery.transfer.${item.outcome}` as const;
+      return (
+        currentLineKey(item.outcome, item.holding) ??
+        (`notices.recovery.transfer.${item.outcome}` as const)
+      );
     case "write_applied":
       // A runtime write is a service request (case.*) or a transfer offer
       // or its cancellation: each is told as what it was.
-      return item.operation === "transfer.offer"
-        ? "notices.recovery.runtime.transfer_offered"
-        : item.operation === "transfer.cancel"
-          ? "notices.recovery.runtime.transfer_cancelled"
-          : "notices.recovery.runtime.write_applied";
+      if (item.operation === "transfer.offer") {
+        return (
+          currentLineKey("transfer_offered", item.holding) ??
+          "notices.recovery.runtime.transfer_offered"
+        );
+      }
+      if (item.operation === "transfer.cancel") {
+        return (
+          currentLineKey("transfer_cancelled", item.holding) ??
+          "notices.recovery.runtime.transfer_cancelled"
+        );
+      }
+      return "notices.recovery.runtime.write_applied";
     default:
       return `notices.recovery.any.${item.outcome}` as const;
   }

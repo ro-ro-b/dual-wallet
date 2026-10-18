@@ -4866,6 +4866,7 @@ type RecoveredWire = {
   offer_id: string | null;
   step: string | null;
   outcome: string;
+  holding: string | null;
   ticket: string | null;
 };
 const recoveredItems = (body: Json) => (body.items ?? []) as RecoveredWire[];
@@ -6419,6 +6420,107 @@ describe("recovery: nothing is re-sent and every original record is preserved (P
         .map((call) => call.operationId);
       expect(new Set(sentWrites).size).toBe(sentWrites.length);
       expect(sentWrites).toContain(write.operationId);
+    },
+  );
+});
+
+describe("recovery: a transfer is told by who holds the unit now (PROPOSED r20 fixture)", () => {
+  it.each(
+    BRANDS.map((brand) => [brand.label, brand]) as Array<[string, Brand]>,
+  )(
+    "%s: the former owner's offer, request and transfer step read elsewhere, then registered once the unit is back and registered, held before that, and unread when the fresh read fails; outcomes, tickets and records unchanged",
+    async (_label, brand) => {
+      const world0 = await custodyRecoveryWorld(brand);
+      const runtime = runtimeOf(brand);
+      const snapshot = () =>
+        JSON.stringify({
+          writes: [...runtime.writes.entries()],
+          recoverables: [...runtime.recoverables.entries()],
+          acks: [...runtime.acks.entries()],
+          executed: world.dual.executed,
+        });
+      const before = snapshot();
+      const business = businessOf();
+      const sendsBefore = faceSends(brand);
+      const fresh = afterLostCookies(
+        brand,
+        brand.holder,
+        world0.session,
+        "holding",
+      );
+      const listing = async () => {
+        const listed = await fresh.recovery();
+        expect(listed.status).toBe(200);
+        expect(listed.body).toMatchObject({ supported: true, complete: true });
+        const body = listed.body;
+        return {
+          offer: recoveredItems(body).find(
+            (item) => item.operation === "transfer.offer",
+          ),
+          request: itemOf(body, world0.requestOperation),
+          custody: itemOf(body, world0.custodyOperation),
+          registration: itemOf(body, world0.registration),
+          settle: itemOf(body, world0.settleOperation),
+        };
+      };
+      const expectHolding = (
+        items: Awaited<ReturnType<typeof listing>>,
+        holding: string | null,
+      ) => {
+        expect(items.offer).toMatchObject({
+          outcome: "write_applied",
+          holding,
+        });
+        expect(items.request).toMatchObject({
+          outcome: "transfer_request_committed",
+          holding,
+        });
+        expect(items.custody).toMatchObject({
+          outcome: "transferred",
+          holding,
+        });
+        // The proved outcome keeps its ticket whatever holds now.
+        for (const item of [items.offer, items.request, items.custody]) {
+          expect(typeof item!.ticket).toBe("string");
+        }
+        // A registration or settle says nothing of who holds the unit now.
+        expect(items.registration).toMatchObject({ holding: null });
+        expect(items.settle).toMatchObject({
+          outcome: "registered",
+          holding: null,
+        });
+      };
+
+      // The holder's own transfer completed: the recipient holds the unit.
+      expectHolding(await listing(), "elsewhere");
+
+      // FIXTURE: the unit back in the holder's wallet with its record still
+      // saying Transfer pending, then registered again. This stands in for
+      // the recipient's return and the holder's registration of it, which
+      // this listing does not depend on (only Dual's current projection).
+      const unit = world.dual.units.get(brand.unit.id)!;
+      unit.owner = brand.holder.address;
+      expect(unit.custom).toMatchObject({ state: "Transfer pending" });
+      expectHolding(await listing(), "held");
+      unit.custom = {
+        ...unit.custom,
+        state: "Authenticity verified",
+        lifecycle: { target_state: "Authenticity verified" },
+      };
+      expectHolding(await listing(), "registered");
+
+      // The fresh read unavailable: nothing is guessed, the check is still
+      // complete and every proved outcome keeps its own line and ticket.
+      getObjectByIdPublic.mockImplementation(async () => {
+        throw new ResponseError(new Response(null, { status: 503 }));
+      });
+      expectHolding(await listing(), null);
+
+      // Read-only throughout: no record, receipt, acknowledgement or Dual
+      // action changed, and nothing was sent again.
+      expect(snapshot()).toBe(before);
+      expect(businessOf()).toEqual(business);
+      expect(faceSends(brand)).toBe(sendsBefore);
     },
   );
 });
