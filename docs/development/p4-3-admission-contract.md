@@ -25,7 +25,9 @@ Read-only source facts this contract is derived from:
 | The 16 schema keys: `accessClass`, `activation_hash`, `admissionStatus`, `admissionWindowEndsAt`, `admissionWindowStartsAt`, `app_namespace`, `eventRef`, `idempotency_key`, `operation_id`, `product_type`, `recipient_mint_projection`, `recordId`, `seatRef`, `state`, `title`, `venueRef`.                                                                                                                                                                                                           | `src/dual-activation.mjs:48-53`                                                      |
 | The closed template admits no extra keys, so the write's binding to its intent is carried by `operation_id` = `op_` + first 40 hex of, and `idempotency_key` = `tig:dual-operation:` + all 64 hex of, `sha256(stableJson({appNamespace, orgId, templateId, actionType, clientActionId, expectedHash}))`; verification recomputes them (`ticketActionProofMatches`, carrier `operation_id_and_idempotency_key`).                                                                                          | `src/dual-activation.mjs:308-323, 349-353, 3436-3438`                                |
 | The wire write is Dual `executeAction` `{action: {update: {id: <objectId>, data: {custom: <map>}}}}` (MCP), or REST `{action: {update: {id, custom}}}` / `{update: {id, data: {custom}}}`.                                                                                                                                                                                                                                                                                                               | `src/dual-activation.mjs:1614-1740`                                                  |
-| Issuance identity: `activation_hash` (64 hex) is written at issue and preserved by every later ticket update; `operation_id`/`idempotency_key` are replaced by each lifecycle write and are NOT the issue identity after admission.                                                                                                                                                                                                                                                                      | `src/dual-activation.mjs:780, 804-827, 4998-5010`                                    |
+| `activation_hash` (64 hex) is the immutable issuance CONTENT identity: written at issue and preserved by every later ticket update. It is not an operation id. `operation_id`/`idempotency_key` hold the birth operation only until the first lifecycle write replaces them.                                                                                                                                                                                                                             | `src/dual-activation.mjs:780, 804-827, 4998-5010`                                    |
+| The original birth operation is recorded on the record's `issue_ticket` outbox entry (`operationId`, `idempotencyKey`, `clientActionId`, `originalPreparation`; "never trimmed"), and the birth Dual action on the issue event's `dualProof` (`actionId`, `providerActions[0]` of type `mint`, `expectedHash` = `activation_hash`). At mint, Dual's object carried that `operation_id` (the mint reconciliation matches `custom.operation_id`).                                                          | `api/purpose-runtime.mjs:2411-2419, 2632-2700`; `src/dual-activation.mjs:3505-3525`  |
+| The existing Dual history read (`normalizedObjectHistory`) yields per change only `type`, owner, `action_id`, nonce and `next_content_hash`; past custom maps are not read.                                                                                                                                                                                                                                                                                                                              | `src/generated-app-wallet-access.mjs:58-67, 88-93`                                   |
 | The record's pass code `DT1.<recordId>.<20 hex>` is `sha256(appInstanceId                                                                                                                                                                                                                                                                                                                                                                                                                                | recordId                                                                             | objectId | holderWallet)`truncated, released only once`ticketRecordCustody`holds (issued, exactly read back, nothing pending, holder recorded). Today only to a`ticket_holder` role session. | `src/ticket-record-runtime.mjs:37-85` |
 | The shared product-face runtime (propose/reserve/verify/status, public action-log signer readback) is bound to `product-passport` only.                                                                                                                                                                                                                                                                                                                                                                  | `src/product-face-runtime.mjs:75, 438, 483-529, 1884-2306`                           |
 
@@ -109,26 +111,83 @@ none silently: unknown input keys are `face_request_invalid` (400).
   `fromStates` exactly `["Valid"]`, `targetStates` exactly `["Admitted"]`;
   `preserveUnlisted` exactly `true`. Anything else makes the binding invalid
   (the wallet's registry fails closed, as for every binding error).
-- `issueOperation` for this template is `activation_hash`: it is the only
-  issuance identity that survives admission.
+- `issueOperation` for this template names `activation_hash` ONLY as the
+  P4.2 projection's "issuance recorded" gate: it is the immutable issuance
+  content identity, NOT the original issue operation, and with `admission`
+  present the wallet never displays it as an operation or reference. The
+  original birth operation and action are shown only from §5.1's runtime
+  issuance proof; nothing reconstructs them from the current `operation_id`.
 - `Admitted` is in none of the P4.2 state lists: current Dual state alone never
   reads as admitted (§8).
 - Absent `admission`: P4.2 bytes and behaviour, unchanged.
 
 ## 5. Operations (all new on the runtime)
 
-`<op>` is the wallet operation id (`^[A-Za-z0-9_-]{16,80}$`, the existing face
+`<op>` is the wallet operation id (`^[a-z0-9-]{8,64}$`, the existing face
 operation id). Refusals are `{ ok: false, status, reason }` with plain
-lowercase codes; every refusal names zero writes.
+lowercase codes.
+
+### 5.0 Write accounting
+
+- None of these operations writes to Dual itself; their accounting fields
+  (`runtime_dual_writes: 0`) describe only that call.
+- No response may describe the HOLDER's admission attempt as zero, not sent
+  or failed once `admission.reserve` has answered `won` for its request: the
+  holder may have dispatched. Every response for such a request carries
+  `holder_dispatch`: `"reserved"` (won, outcome not proven), `"verified"`
+  (§5.5), or, for a request never reserved, `"none"`.
+- A refusal after `won` (401/403, an unavailable or lost verification, a
+  timeout) is an answer about that call only: the attempt stays
+  `outcome_unknown` with its original reservation and journal, never
+  `not_submitted`, and only §5.6 may read it further.
 
 ### 5.1 `ticket.pass.read`
 
 - `operationId`: a fresh read id; `input`: `{}`.
-- 200 `{ ok: true, status: "ticket_pass_ready", object_id, pass: { schema_version: "tig-ticket-pass-code-v1", code: "DT1.<recordId>.<20 hex>" } }`
+- 200 `{ ok: true, status: "ticket_pass_ready", object_id, pass: { schema_version: "tig-ticket-pass-code-v1", code: "DT1.<recordId>.<20 hex>" }, issuance: <proof> }`
   only when the record bound to `object_id` satisfies `ticketRecordCustody`
   with `custody.objectId === object_id` and `custody.holderWalletAddress ===
 holder`, and the code equals `ticketPassCode({appInstanceId, recordId,
 ...custody})`.
+- `issuance` (`ticket-issuance-proof-v1`), read and checked by the runtime on
+  every call, never from the catalog alone and never from the current
+  `operation_id`:
+
+  ```json
+  {
+    "schema_version": "ticket-issuance-proof-v1",
+    "record_id": "<record id>",
+    "object_id": "<24 hex>",
+    "activation_hash": "<64 hex>",
+    "birth_operation_id": "op_<40 hex>",
+    "birth_idempotency_key": "tig:dual-operation:<64 hex>",
+    "birth_action_id": "<Dual action id>",
+    "evidence": {
+      "birth_action": "verified",
+      "activation_hash": "verified",
+      "operation_commitment": "verified",
+      "operation_readback": "current | superseded"
+    }
+  }
+  ```
+
+  - `birth_operation_id`/`birth_idempotency_key`: the record's `issue_ticket`
+    outbox entry, recomputed by `dualDispatchIdentifiers({actionId:
+clientActionId}, config, "mint_asset", activation_hash)` and equal to
+    it (`operation_commitment: verified`).
+  - `activation_hash`: the fresh Dual object's `custom.activation_hash`,
+    equal to the issue event's `dualProof.expectedHash`
+    (`activation_hash: verified`).
+  - `birth_action_id`: the issue event's `dualProof.providerActions[0]`
+    (type `mint`); Dual's object history has a `mint` change with that
+    `action_id`, and its public action log names this object
+    (`birth_action: verified`).
+  - `operation_readback`: `current` when the fresh object's `operation_id`
+    is still `birth_operation_id` (no later update); `superseded` once a
+    later update replaced it (§10.1).
+  - When any check does not hold, `issuance` is absent (the pass may still
+    be served) and the wallet shows no original issue operation.
+
 - Otherwise 404 `ticket_pass_unavailable` (one answer for every refusal).
 
 ### 5.2 `admission.pending.read`
@@ -138,8 +197,19 @@ holder`, and the code equals `ticketPassCode({appInstanceId, recordId,
   - `{ ok: true, status: "none", object_id }`
   - `{ ok: true, status: "awaiting_holder", object_id, request: { request_id, event_ref, created_at, expires_at } }`
   - `{ ok: true, status: "expired", object_id, request: { request_id, event_ref, created_at, expires_at } }`
-  - `{ ok: true, status: "admitted", object_id, admission: { request_id, action_id, admitted_at, receipt_id } }`
-    (only after §5.5's verification committed it).
+  - `{ ok: true, status: "admitted", object_id, admission: { request_id, action_id, admitted_at, receipt_id, readback: { state, admission_status, operation_id, idempotency_key } } }`
+    only after §5.5's verification committed it AND, on THIS call, a fresh
+    Dual read shows the committed admission map exactly (`state` and
+    `admissionStatus` `Admitted`, `operation_id`/`idempotency_key` equal to
+    the committed proposal's) and the action log of `action_id` names the
+    request's owner as signer. A saved record state or an old receipt alone
+    is never enough.
+  - `{ ok: true, status: "admission_unverified", object_id, request: { request_id, event_ref, created_at, expires_at } }`
+    when the record says admitted but this call's fresh Dual proof does not
+    hold (a later update, drift, or an unreadable action log).
+- A holder's own update that writes `Admitted` without this contract's
+  request-bound identifiers is not admission: `none` (or the request's real
+  status), never `admitted`.
 - Only for the holder: the record's `ticketHolderWalletAddress`,
   `request.owner` and a fresh Dual owner all equal `holder`; the record's
   object is `object_id`. Otherwise 404 `admission_not_found`.
@@ -225,7 +295,17 @@ object_id, proposal_id, request_id } }` exactly once. A replay of the same
 - Lost answers after `won`: `outcome_unknown`, read-only `admission.status`
   only; never sign, resend, cancel, reserve again or release.
 - "Entry confirmed" only from §5.5/§5.6 `admitted` plus the wallet's own
-  fresh read showing the proposal's exact map.
+  fresh read showing the proposal's exact map; on a fresh or reopened
+  device, from §5.2 `admitted` plus the wallet's own fresh read matching its
+  `readback` exactly. `admission_unverified`, a refusal, or an unreadable
+  answer is never shown as entry.
+- After `won`, no refusal, 401/403, unavailable verification or lost reply
+  turns the attempt into "not sent": it stays `outcome_unknown` under its
+  original operation.
+- The original issue operation and action are shown only from §5.1's
+  `issuance` with every `evidence` check `verified` (`operation_readback`
+  shown as is); `activation_hash` only as the issuance content hash, under a
+  technical disclosure.
 
 ## 7. Recovery
 
@@ -247,6 +327,10 @@ object_id, proposal_id, request_id } }` exactly once. A replay of the same
 
 ## 9. Open items Studio must confirm before acceptance
 
+- `ticket.pass.read`'s `issuance` proof is implemented as §5.1 states, and
+  the issue event's `providerActions[0]` is the `mint` action (for an issue
+  with a post-mint update, `dualProof.actionId` is the update's).
+
 1. A holder-issued ticket's LIVE object has exactly the 16 closed-template
    keys (the source handles both shapes; this contract supports only that
    one).
@@ -255,3 +339,20 @@ object_id, proposal_id, request_id } }` exactly once. A replay of the same
 3. The holder's own Dual REST `/ebus/execute` `{action: {update: {id, data:
 {custom}}}}` produces the same object state as the runtime's MCP
    `executeAction` for the same map.
+
+## 10. Contract limits (stated, not invented)
+
+1. **Birth operation after a later update.** Dual's history as the existing
+   adapter reads it carries no past custom map, so once a later update (the
+   admission itself) replaces `operation_id`, the birth `operation_id` can no
+   longer be read back from Dual. It is then established by the record's
+   original preimage, recomputed against the Dual-verified immutable
+   `activation_hash` (`operation_commitment: verified`), while the birth
+   ACTION stays Dual-attested (`birth_action: verified`), with
+   `operation_readback: superseded` stated. If acceptance requires a Dual
+   re-read of the birth `operation_id` after admission, that needs a
+   provider capability this source does not establish (a history read that
+   returns past custom maps), and v1 cannot meet it.
+2. The wallet stores no issuance proof: "identical before and after
+   admission" is the runtime returning the same `birth_operation_id` and
+   `birth_action_id` on each call, which the wallet checks and shows.
