@@ -42,6 +42,34 @@ export function calendarDay(instant: Date, timeZone: string): string {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+/** The longest a long-lived home waits before checking the day again. */
+export const DAY_CHECK_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * How long until the viewer's calendar day (in `timeZone`) next ends, capped
+ * at DAY_CHECK_MAX_MS so a 23- or 25-hour day around a clock change is
+ * corrected within the hour; at least one second. Callers check the day again
+ * when it fires rather than assuming it changed.
+ */
+export function untilNextDayCheck(now: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat(undefined, {
+    timeZone,
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hourCycle: "h23",
+    numberingSystem: "latn",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((item) => item.type === type)?.value ?? 0);
+  const elapsed =
+    ((part("hour") * 60 + part("minute")) * 60 + part("second")) * 1000 +
+    now.getMilliseconds();
+  // One second past the boundary, so the check lands in the new day.
+  const remaining = 86_400_000 - elapsed + 1000;
+  return Math.min(Math.max(remaining, 1000), DAY_CHECK_MAX_MS);
+}
+
 const byStart = (a: Ticket, b: Ticket) =>
   Date.parse(a.event.startsAt!) - Date.parse(b.event.startsAt!) ||
   a.objectId.localeCompare(b.objectId);

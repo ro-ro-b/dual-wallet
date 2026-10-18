@@ -194,7 +194,11 @@ uses those tokens:
   object's own pending or unconfirmed status), each linking to the exact
   ticket, plus "See all your tickets". "Today" and every time shown use the
   viewer's own IANA time zone (`Intl.DateTimeFormat().resolvedOptions()`),
-  named next to each time. It never pages on its own, says when more tickets
+  named next to each time. On a home left open, "Today" moves on when the
+  viewer's calendar day ends (a local timer, re-checked at most hourly) and
+  when a hidden tab is shown again after the date changed; that only
+  reclassifies the tickets already read, and never fetches, retries or
+  writes. It never pages on its own, says when more tickets
   may exist, and claims nothing for a past or undated ticket. Empty-but-more,
   none and unavailable are distinct; nothing is retried automatically. Every
   session end (logout, expiry, account change) remounts it after the

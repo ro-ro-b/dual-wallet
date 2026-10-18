@@ -10,7 +10,11 @@ import { Button } from "@/app/_components/design-system/button";
 import { TicketStatusBadge } from "@/app/_components/products/tickets-view";
 import { newFaceLaunchId } from "@/app/_domain/product-face";
 import type { Ticket } from "@/app/_domain/tickets";
-import { ticketsToday } from "@/app/_domain/tickets-today";
+import {
+  calendarDay,
+  ticketsToday,
+  untilNextDayCheck,
+} from "@/app/_domain/tickets-today";
 import { sessionQueryOptions } from "@/app/_hooks/query-options";
 import { useTickets } from "@/app/_hooks/use-tickets";
 import { useSession } from "@/app/_providers/session-provider";
@@ -19,6 +23,45 @@ import { TicketsError } from "@/app/_services/tickets.client";
 /** The viewer's own IANA time zone: "Today" and every time shown use it. */
 function viewerTimeZone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+/**
+ * The current instant for classifying tickets, refreshed only when the
+ * viewer's calendar day changes: at the day's end on a long-lived page, and
+ * when a hidden tab is shown again after the date changed. It only updates
+ * local state; it reads nothing and writes nothing.
+ */
+function useCalendarNow(timeZone: string) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = () => {
+      const current = new Date();
+      setNow((previous) =>
+        calendarDay(previous, timeZone) === calendarDay(current, timeZone)
+          ? previous
+          : current,
+      );
+      return current;
+    };
+    const schedule = (from: Date) => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => schedule(check()),
+        untilNextDayCheck(from, timeZone),
+      );
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") schedule(check());
+    };
+    schedule(new Date());
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [timeZone]);
+  return now;
 }
 
 function TicketLine({
@@ -101,8 +144,9 @@ function TodayTickets({
   const t = useTranslations("host.today");
   const [launchId] = useState(newFaceLaunchId);
   const [timeZone] = useState(viewerTimeZone);
-  // One instant per visit: "Today" does not shift between renders.
-  const [now] = useState(() => new Date());
+  // "Today" is the viewer's current calendar day: stable between renders,
+  // moved on only when that day actually changes (see useCalendarNow).
+  const now = useCalendarNow(timeZone);
   // The first Tickets page only: the home never pages on its own.
   const query = useTickets({ slug, launchId, walletId });
   const seeAll = (

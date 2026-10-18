@@ -2,7 +2,9 @@ import type { Ticket } from "@/app/_domain/tickets";
 import {
   calendarDay,
   COMING_UP_LIMIT,
+  DAY_CHECK_MAX_MS,
   ticketsToday,
+  untilNextDayCheck,
 } from "@/app/_domain/tickets-today";
 
 let serial = 0;
@@ -113,5 +115,23 @@ describe("ticketsToday", () => {
     expect(view.attention.map((t) => t.objectId)).toEqual([
       unconfirmed.objectId,
     ]);
+  });
+});
+
+describe("untilNextDayCheck", () => {
+  it("waits until just past the viewer's own midnight, in their zone", () => {
+    // 23:59:30 on 18 October in Sydney (AEDT, UTC+11).
+    const late = new Date("2026-10-18T12:59:30Z");
+    expect(untilNextDayCheck(late, "Australia/Sydney")).toBe(31_000);
+    // The same instant is mid-afternoon in UTC: capped, checked again later.
+    expect(untilNextDayCheck(late, "UTC")).toBe(DAY_CHECK_MAX_MS);
+  });
+
+  it("lands in the new day", () => {
+    const late = new Date("2026-10-18T12:59:30Z");
+    const fired = new Date(
+      late.getTime() + untilNextDayCheck(late, "Australia/Sydney"),
+    );
+    expect(calendarDay(fired, "Australia/Sydney")).toBe("2026-10-19");
   });
 });

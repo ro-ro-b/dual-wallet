@@ -4,6 +4,11 @@
 // programme objects below and the `/__test__/*` hooks.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import {
+  OTHER_ORGANIZATION,
+  TICKET_IDS,
+  TICKET_TEMPLATE,
+} from "./tickets-home/environment.mjs";
 
 const expectedOrganizationId =
   process.env.DEFAULT_ORGANIZATION_ID || "000000000000000000000001";
@@ -173,7 +178,120 @@ function seedProgramme() {
   return objects;
 }
 
+// ------------------------------------------------- tickets (opt-in fixture)
+// FICTIONAL event tickets for the Tickets/Home browser fixture
+// (playwright.tickets-home.config.ts), seeded only when MOCK_TICKETS=1 so
+// every other suite sees exactly the store it always has. Times are relative
+// to when the store is seeded: "today" is the seeding instant itself, which is
+// today in every time zone.
+const ticketsFixture = process.env.MOCK_TICKETS === "1";
+const TICKETS = {
+  template: TICKET_TEMPLATE,
+  otherOrganization: OTHER_ORGANIZATION,
+  ...TICKET_IDS,
+};
+// "normal" | "emptyWithMore" (no ticket on any upstream page, always more) |
+// "unavailable" (the list read fails). Changed only through /__test__.
+let ticketsMode = "normal";
+// When true every bearer request and refresh is refused: the session ended.
+let ticketSessionsExpired = false;
+
+function ticketObject(
+  id,
+  { owner, orgId = expectedOrganizationId, title, startsAt, state, issue },
+) {
+  return {
+    id,
+    org_id: orgId,
+    metadata: { name: `${title} entry`, description: "Fictional ticket" },
+    owner,
+    template_id: TICKETS.template,
+    nonce: 1,
+    version: 1,
+    state_hash: `0x${id}`,
+    content_hash: `0x${id}`,
+    integrity_hash: `0x${id}`,
+    prev_integrity_hash: `0x${id}`,
+    custom: {
+      event: {
+        title,
+        ...(startsAt ? { starts_at: startsAt } : {}),
+        venue: "Quay Hall (fictional)",
+      },
+      ticket: {
+        class: "Standing",
+        entry_guidance: "Doors open 30 minutes before the start.",
+        state,
+      },
+      ...(issue ? { issue: { operation_id: issue } } : {}),
+    },
+    when_created: "2026-10-01T09:00:00.000Z",
+    when_modified: "2026-10-01T09:00:00.000Z",
+  };
+}
+
+function seedTickets(store) {
+  const now = new Date(Math.floor(Date.now() / 60_000) * 60_000);
+  const days = (count) =>
+    new Date(now.getTime() + count * 86_400_000).toISOString();
+  const holder = PROGRAMME.walletAddress;
+  const add = (id, fields) => store.set(id, ticketObject(id, fields));
+  add(TICKETS.today, {
+    owner: holder,
+    title: "Harbour Night",
+    startsAt: now.toISOString(),
+    state: "Issued",
+    issue: "fx-issue-0001",
+  });
+  add(TICKETS.comingUp, {
+    owner: holder,
+    title: "Lantern Walk",
+    startsAt: days(3),
+    state: "Issued",
+    issue: "fx-issue-0002",
+  });
+  add(TICKETS.pending, {
+    owner: holder,
+    title: "Pier Concert",
+    startsAt: days(10),
+    state: "Issuing",
+    issue: "fx-issue-0003",
+  });
+  // No issue operation recorded: the wallet must not call it issued.
+  add(TICKETS.unconfirmed, {
+    owner: holder,
+    title: "Dawn Swim",
+    state: "Issued",
+  });
+  add(TICKETS.past, {
+    owner: holder,
+    title: "Winter Fair",
+    startsAt: days(-3),
+    state: "Issued",
+    issue: "fx-issue-0005",
+  });
+  // The holder's, but issued by another organisation: never this client's.
+  add(TICKETS.otherClient, {
+    owner: holder,
+    orgId: TICKETS.otherOrganization,
+    title: "Other Client Gala",
+    startsAt: days(1),
+    state: "Issued",
+    issue: "fx-issue-0006",
+  });
+  // This client's, but held by the second fictional account.
+  add(TICKETS.otherHolder, {
+    owner: SECOND_ACCOUNT.walletAddress,
+    title: "Second Holder Night",
+    startsAt: days(2),
+    state: "Issued",
+    issue: "fx-issue-0007",
+  });
+  return store;
+}
+
 let objects = seedProgramme();
+if (ticketsFixture) seedTickets(objects);
 let actionLogs = [];
 // Test mode: execute answers to drop after the action ran (a lost response).
 let loseExecuteResponses = 0;
@@ -349,6 +467,7 @@ function readBody(request) {
 }
 
 const authorized = (request) =>
+  !(ticketsFixture && ticketSessionsExpired) &&
   /^Bearer\s+\S+/.test(request.headers.authorization ?? "");
 
 function display(variant) {
@@ -388,6 +507,24 @@ async function handleProgramme(request, response, url) {
     actionLogs = [];
     loseExecuteResponses = 0;
     return respond(response, 200, { ok: true });
+  }
+  if (ticketsFixture && method === "POST" && path === "/__test__/tickets") {
+    const body = await readBody(request);
+    if (body?.reset) {
+      objects = seedTickets(seedProgramme());
+      ticketsMode = "normal";
+      ticketSessionsExpired = false;
+    }
+    if (["normal", "emptyWithMore", "unavailable"].includes(body?.mode)) {
+      ticketsMode = body.mode;
+    }
+    if (typeof body?.expireSessions === "boolean") {
+      ticketSessionsExpired = body.expireSessions;
+    }
+    return respond(response, 200, {
+      mode: ticketsMode,
+      expireSessions: ticketSessionsExpired,
+    });
   }
   if (method === "POST" && path === "/__test__/mode") {
     const body = await readBody(request);
@@ -431,6 +568,8 @@ async function handleProgramme(request, response, url) {
   }
 
   if (method === "POST" && path === "/auth/login") {
+    // A new sign-in starts a session the Tickets fixture has not expired.
+    ticketSessionsExpired = false;
     const body = await readBody(request);
     if (body?.organization_id !== expectedOrganizationId) {
       return respond(response, 422, { message: "Unexpected organization" });
@@ -451,6 +590,14 @@ async function handleProgramme(request, response, url) {
   }
   if (method === "POST" && path === "/auth/logout") {
     return respond(response, 200, {});
+  }
+  if (
+    method === "POST" &&
+    path === "/auth/refresh-token" &&
+    ticketsFixture &&
+    ticketSessionsExpired
+  ) {
+    return respond(response, 401, { message: "Refresh token expired" });
   }
   if (method === "POST" && path === "/auth/refresh-token") {
     const { access_token, refresh_token } = login(bearerAccount(request));
@@ -504,6 +651,15 @@ async function handleProgramme(request, response, url) {
     const templateId = url.searchParams.get("template_id");
     const owner = url.searchParams.get("owner")?.toLowerCase();
     const id = url.searchParams.get("id");
+    if (ticketsFixture && templateId === TICKETS.template && !id) {
+      if (ticketsMode === "unavailable") {
+        return respond(response, 503, { message: "Fictional outage" });
+      }
+      if (ticketsMode === "emptyWithMore") {
+        const page = Number(url.searchParams.get("next")?.slice(3) ?? 0);
+        return respond(response, 200, { objects: [], next: `fx-${page + 1}` });
+      }
+    }
     if (integrated(id, templateId)) {
       if (!id) return forwardProgramme(request, response, url);
       // One object with its template's actions. The Studio fake Dual has no

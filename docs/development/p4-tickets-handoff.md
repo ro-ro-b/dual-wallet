@@ -47,10 +47,29 @@ for the rules. Paths: `app/page.tsx`, `app/_components/host/{host-home,tickets-t
 `app/_components/host/tickets-today.test.tsx`, `app/page.test.tsx`,
 `api/host-tickets.test.ts`.
 
-Not covered: no browser (Playwright) test. The e2e builds are generic-wallet
-only and a host configuration is a build input, so one needs a branded-host
-Playwright build (a test `WALLET_HOST_CONFIGURATION` with Tickets and a face
-binding with `tickets` rules) and mock-API ticket objects for `listObjects`.
+### Fictional Tickets/Home browser fixture
+
+A separately named, opt-in fixture runs the real wallet (`next dev`) as the
+made-up "Harbour Nights" branded host against the local fake API with opt-in
+ticket objects (`MOCK_TICKETS=1` in `e2e/mock-api.mjs`; without it the fake API
+is unchanged). Every value is fictional; the host configuration is built and
+pinned per run (`e2e/tickets-home/environment.mjs`) and validated by the
+wallet's own parser; session and signing keys are generated per process.
+
+- Browser suite: `npx playwright test -c playwright.tickets-home.config.ts`
+  (set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` where the installed Playwright's
+  Chromium build is not present).
+- Persistent walk: `node e2e/tickets-home/serve.mjs`, then open
+  `http://localhost:3310/`. Ports: `TICKETS_FIXTURE_WALLET_PORT` (3310) and
+  `TICKETS_FIXTURE_API_PORT` (4310). Fictional sign-in:
+  `face-e2e@example.com` / `correct horse battery staple`; second holder
+  `face-e2e-b@example.com` / `another correct horse battery`. Fixture modes
+  (local fake only): `POST http://127.0.0.1:4310/__test__/tickets` with
+  `{"mode":"emptyWithMore"|"unavailable"|"normal"}`, `{"expireSessions":true}`
+  or `{"reset":true}`.
+- It cannot run alongside another `next dev` in the same checkout (Next.js
+  holds one dev lock per project directory); use a separate checkout.
+- Fixture success is not hosted or customer acceptance.
 
 ## Boundaries kept
 

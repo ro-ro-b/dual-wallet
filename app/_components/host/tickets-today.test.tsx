@@ -317,3 +317,90 @@ describe("whose tickets", () => {
     expect(screen.getByText("Sign in to see your tickets.")).toBeTruthy();
   });
 });
+
+describe("a home left open across the viewer's midnight", () => {
+  // 23:59:30 on 18 October in Sydney (12:59:30 UTC).
+  const LATE = new Date("2026-10-18T12:59:30Z");
+  const tickets = {
+    status: 200,
+    body: {
+      tickets: [
+        // 22:00 on the 18th in Sydney.
+        wire("1", at("2026-10-18T11:00:00Z")),
+        // 10:00 on the 19th in Sydney.
+        wire("2", at("2026-10-18T23:00:00Z")),
+      ],
+      next: null,
+    },
+  };
+  const titles = (name: string) =>
+    within(screen.getByRole("region", { name }))
+      .getAllByRole("link")
+      .map((link) => link.textContent);
+
+  it("moves Today on at midnight without reading or writing anything", async () => {
+    jest.setSystemTime(LATE);
+    ticketReplies = [tickets];
+    view();
+    await screen.findByRole("region", { name: "Today" });
+    expect(titles("Today")).toEqual([expect.stringContaining("Event 1")]);
+    expect(titles("Coming up")).toEqual([expect.stringContaining("Event 2")]);
+    const reads = ticketsCalls().length;
+
+    await act(async () => {
+      jest.advanceTimersByTime(40_000);
+    });
+    expect(titles("Today")).toEqual([expect.stringContaining("Event 2")]);
+    // Yesterday's event is no longer Today, and is not called ended either.
+    expect(screen.queryByText(/Event 1/)).toBeNull();
+    expect(screen.queryByRole("region", { name: "Coming up" })).toBeNull();
+    expect(screen.queryByText(/No longer valid/)).toBeNull();
+    // The day changed locally: no ticket read, no retry, no write.
+    expect(ticketsCalls()).toHaveLength(reads);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([, init]) => init?.method && init.method !== "GET",
+      ),
+    ).toEqual([]);
+  });
+
+  it("catches up when a hidden tab is shown again on a later day", async () => {
+    jest.setSystemTime(new Date("2026-10-18T09:00:00Z"));
+    ticketReplies = [tickets];
+    view();
+    await screen.findByRole("region", { name: "Today" });
+    expect(titles("Today")).toEqual([expect.stringContaining("Event 1")]);
+    const reads = ticketsCalls().length;
+
+    // The tab slept past midnight: no timer ran, the clock moved on.
+    jest.setSystemTime(new Date("2026-10-18T22:00:00Z"));
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(titles("Today")).toEqual([expect.stringContaining("Event 2")]);
+    expect(ticketsCalls()).toHaveLength(reads);
+  });
+
+  it("stops its clock and its listener when it goes away", async () => {
+    jest.setSystemTime(LATE);
+    ticketReplies = [tickets];
+    const removed = jest.spyOn(document, "removeEventListener");
+    const { unmount } = view();
+    await screen.findByRole("region", { name: "Today" });
+    unmount();
+    expect(removed).toHaveBeenCalledWith(
+      "visibilitychange",
+      expect.any(Function),
+    );
+    const reads = ticketsCalls().length;
+    // Nothing fires after unmount (no state update on an unmounted tree).
+    const errors = jest.spyOn(console, "error").mockImplementation(() => {});
+    jest.advanceTimersByTime(2 * 60 * 60 * 1000);
+    expect(errors).not.toHaveBeenCalled();
+    expect(ticketsCalls()).toHaveLength(reads);
+  });
+});
