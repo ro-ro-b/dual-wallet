@@ -7,6 +7,7 @@ import {
   parseJournalEntry,
   pruneJournal,
   recoverableRegistration,
+  sentAdmissionStep,
   sentTransferStep,
   type FaceJournalEntry,
 } from "@/app/_domain/product-face-journal";
@@ -303,6 +304,21 @@ export function readFaceHistory(
  * so this is how the host finds the step again: read-only, never rebound,
  * re-sealed or rewritten, and never a basis to reserve, submit or execute.
  */
+/**
+ * P4.3: admission steps in this browser's OTHER launch journals of this same
+ * wallet, face and programme (a reopened ticket page is a new launch). Read
+ * only to follow their original operation read-only; never rewritten.
+ */
+export function readFaceAdmissionHistory(
+  request: NextRequest,
+  scope: FaceJournalScope,
+  now = Date.now(),
+): FaceJournalEntry[] {
+  return historyEntries(request, scope, now).filter(
+    (entry) => entry.kind === "admission",
+  );
+}
+
 export function readFaceTransferHistory(
   request: NextRequest,
   scope: FaceJournalScope,
@@ -378,7 +394,9 @@ const none: Found = () => false;
 function signedEvidence(entry: FaceJournalEntry) {
   return (
     (recoverableRegistration(entry) && entry.phase !== "settled") ||
-    sentTransferStep(entry)
+    sentTransferStep(entry) ||
+    // P4.3: an admission step that left the wallet, outcome not yet read.
+    sentAdmissionStep(entry)
   );
 }
 

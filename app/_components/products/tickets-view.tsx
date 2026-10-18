@@ -13,6 +13,7 @@ import { newFaceLaunchId } from "@/app/_domain/product-face";
 import type { Ticket, TicketStatus } from "@/app/_domain/tickets";
 import { useTicket, useTickets } from "@/app/_hooks/use-tickets";
 import { useSession } from "@/app/_providers/session-provider";
+import { TicketAdmission } from "@/app/_components/products/ticket-admission";
 import { TicketsError } from "@/app/_services/tickets.client";
 
 const statusTone: Record<TicketStatus, string> = {
@@ -233,10 +234,12 @@ function TicketDetail({
   slug,
   objectId,
   launchId,
+  admission,
 }: {
   slug: string;
   objectId: string;
   launchId: string;
+  admission: boolean;
 }) {
   const t = useTranslations("tickets");
   const { wallet } = useSession();
@@ -289,18 +292,27 @@ function TicketDetail({
             <dt>{t("entryClass")}</dt>
             <dd>{ticket.entryClass ?? t("notStated")}</dd>
           </div>
-          <div>
-            <dt>{t("issueReference")}</dt>
-            <dd>{ticket.issueOperationId ?? t("notRecorded")}</dd>
-          </div>
+          {/* With ticket-admission-v1 the binding's issuance path is a
+              content hash, not an operation: the original issue operation
+              is shown only from the runtime's verified issuance proof. */}
+          {admission ? null : (
+            <div>
+              <dt>{t("issueReference")}</dt>
+              <dd>{ticket.issueOperationId ?? t("notRecorded")}</dd>
+            </div>
+          )}
         </dl>
       </section>
       <section className="card ticket-detail" aria-labelledby="ticket-entry">
         <h2 id="ticket-entry">{t("entryTitle")}</h2>
         {ticket.entryGuidance ? <p>{ticket.entryGuidance}</p> : null}
-        {/* Admission is not part of Tickets yet, whatever the ticket says. */}
-        <p>{t("admissionUnavailable")}</p>
+        {/* Without ticket-admission-v1, entry is not part of Tickets,
+            whatever the ticket says. */}
+        {admission ? null : <p>{t("admissionUnavailable")}</p>}
       </section>
+      {admission ? (
+        <TicketAdmission slug={slug} objectId={objectId} launchId={launchId} />
+      ) : null}
       <div className="load-more">{back}</div>
     </>
   );
@@ -314,16 +326,24 @@ export function TicketsView({
   slug,
   programmeName,
   objectId,
+  admission = false,
 }: {
   slug: string;
   programmeName: string;
   objectId?: string;
+  /** The binding states ticket-admission-v1 and this host serves Tickets. */
+  admission?: boolean;
 }) {
   const [launchId] = useState(newFaceLaunchId);
   return (
     <div className="tickets-view">
       {objectId ? (
-        <TicketDetail slug={slug} objectId={objectId} launchId={launchId} />
+        <TicketDetail
+          slug={slug}
+          objectId={objectId}
+          launchId={launchId}
+          admission={admission}
+        />
       ) : (
         <TicketList
           slug={slug}

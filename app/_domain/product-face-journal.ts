@@ -19,6 +19,8 @@ export const journalKinds = [
   "settle",
   // G8: one holder-signed transfer step (contract r16 transfer.sign).
   "transfer",
+  // P4.3 ticket-admission-v1: the holder's one signed admission update.
+  "admission",
 ] as const;
 export type JournalKind = (typeof journalKinds)[number];
 
@@ -55,6 +57,13 @@ export interface FaceJournalEntry {
   proposalId?: string;
   /** G8: the transfer offer a transfer step belongs to (its id only). */
   offerId?: string;
+  /** P4.3: the gate's admission request an admission step answers (its id only). */
+  admissionRequestId?: string;
+  /**
+   * P4.3: the exact custom map the admission step may sign, as a hash of its
+   * canonical JSON; the proxy forwards nothing else (api/face-execution-binding).
+   */
+  inputHash?: string;
   /**
    * The host-read quote a quote approval or decline is bound to, as a hash of
    * its {quote_version, amount, currency}; never the quote itself.
@@ -129,7 +138,12 @@ const PROGRAMME = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const ACTION_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const OPERATION = /^[a-z_][a-z0-9_.]{1,63}$/;
 const OFFER_ID = /^pto-[0-9a-f]{24}$/;
+const ADMISSION_REQUEST_ID = /^tad-[0-9a-f]{32}$/;
 const TRANSFER_OPERATIONS = ["transfer.request", "transfer.transfer"];
+
+/** A holder-signed step: reserved, then executed only after its own won. */
+export const signedStepKind = (kind: JournalKind) =>
+  kind === "settle" || kind === "transfer" || kind === "admission";
 
 function timestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -162,11 +176,15 @@ export function parseJournalEntry(
         !ACTION_ID.test(entry.proposalId))) ||
     (entry.offerId !== undefined &&
       (typeof entry.offerId !== "string" || !OFFER_ID.test(entry.offerId))) ||
+    (entry.admissionRequestId !== undefined &&
+      (typeof entry.admissionRequestId !== "string" ||
+        !ADMISSION_REQUEST_ID.test(entry.admissionRequestId))) ||
+    (entry.inputHash !== undefined && !isRequestHash(entry.inputHash)) ||
     (entry.quoteHash !== undefined && !isRequestHash(entry.quoteHash)) ||
     (entry.freshHash !== undefined && !isRequestHash(entry.freshHash)) ||
     (entry.dispatch !== undefined &&
       (entry.dispatch !== "won" ||
-        (entry.kind !== "settle" && entry.kind !== "transfer"))) ||
+        !signedStepKind(entry.kind as JournalKind))) ||
     (entry.recordId !== undefined && !isRecordId(entry.recordId)) ||
     (entry.requestHash !== undefined && !isRequestHash(entry.requestHash)) ||
     !timestamp(entry.createdAt) ||
@@ -191,6 +209,19 @@ export function parseJournalEntry(
   ) {
     return undefined;
   }
+  if (
+    (entry.kind === "admission") !==
+      (entry.admissionRequestId !== undefined ||
+        entry.inputHash !== undefined) ||
+    (entry.kind === "admission" &&
+      (entry.operation !== "update" ||
+        !entry.proposalId ||
+        !entry.admissionRequestId ||
+        !entry.inputHash ||
+        !entry.freshHash))
+  ) {
+    return undefined;
+  }
   return {
     operationId: entry.operationId,
     kind: entry.kind as JournalKind,
@@ -204,6 +235,10 @@ export function parseJournalEntry(
     ...(entry.actionId ? { actionId: entry.actionId as string } : {}),
     ...(entry.proposalId ? { proposalId: entry.proposalId as string } : {}),
     ...(entry.offerId ? { offerId: entry.offerId as string } : {}),
+    ...(entry.admissionRequestId
+      ? { admissionRequestId: entry.admissionRequestId as string }
+      : {}),
+    ...(entry.inputHash ? { inputHash: entry.inputHash as string } : {}),
     ...(entry.quoteHash ? { quoteHash: entry.quoteHash as string } : {}),
     ...(entry.freshHash ? { freshHash: entry.freshHash as string } : {}),
     ...(entry.dispatch === "won" ? { dispatch: "won" as const } : {}),
@@ -258,7 +293,7 @@ export function withDispatchWon(
   return entries.map((entry) =>
     entry.operationId === operationId &&
     entry.phase === "submitted" &&
-    (entry.kind === "settle" || entry.kind === "transfer")
+    signedStepKind(entry.kind)
       ? { ...entry, dispatch: "won" as const }
       : entry,
   );
@@ -312,6 +347,21 @@ export function sentTransferStep(entry: FaceJournalEntry) {
     entry.phase === "submitted" &&
     TRANSFER_OPERATIONS.includes(entry.operation) &&
     Boolean(entry.offerId)
+  );
+}
+
+/**
+ * P4.3: an admission step that left the wallet (submitted: reserved at the
+ * runtime, perhaps executed) and is not settled. Wherever it is found (this
+ * launch, or another launch of the same wallet, face and programme after a
+ * reopen), it is only read back under its original operation id: never
+ * signed, reserved or sent again, and never replaced.
+ */
+export function sentAdmissionStep(entry: FaceJournalEntry) {
+  return (
+    entry.kind === "admission" &&
+    entry.phase === "submitted" &&
+    Boolean(entry.admissionRequestId)
   );
 }
 
@@ -549,8 +599,7 @@ export function applyJournalTransition(
         return { ok: false, error: "operation_already_submitted" };
       }
       if (
-        existing.kind === "settle" ||
-        existing.kind === "transfer" ||
+        signedStepKind(existing.kind) ||
         existing.phase !== "confirmed" ||
         existing.objectId !== transition.objectId ||
         (existing.caseId ?? undefined) !== transition.caseId
@@ -577,7 +626,7 @@ export function applyJournalTransition(
         return { ok: false, error: "operation_already_submitted" };
       }
       if (
-        (existing.kind !== "settle" && existing.kind !== "transfer") ||
+        !signedStepKind(existing.kind) ||
         existing.phase !== "confirmed" ||
         existing.objectId !== transition.objectId
       ) {
@@ -591,7 +640,7 @@ export function applyJournalTransition(
       });
     case "record_action":
       if (
-        (existing.kind !== "settle" && existing.kind !== "transfer") ||
+        !signedStepKind(existing.kind) ||
         existing.phase !== "submitted" ||
         (existing.actionId && existing.actionId !== transition.actionId)
       ) {
@@ -672,8 +721,8 @@ export function journalOperationStatus(
   // Closed: provably never accepted, whatever the unit shows since.
   if (entry.closure) return "not_submitted";
   if (entry.kind === "runtime") return "authorized";
-  // G8: a transfer step is known only from the runtime's own verify/status.
-  if (entry.kind === "transfer") {
+  // G8 and P4.3: known only from the runtime's own verify/status.
+  if (entry.kind === "transfer" || entry.kind === "admission") {
     return entry.phase === "settled" ? "registered" : "outcome_unknown";
   }
   if (evaluation === undefined) return "outcome_unknown";

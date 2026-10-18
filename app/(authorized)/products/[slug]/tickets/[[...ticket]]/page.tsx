@@ -29,6 +29,7 @@ export default async function TicketsPage({
       slug={slug}
       programmeName={binding.programmeName}
       objectId={objectId}
+      admission={Boolean(binding.tickets?.admission)}
     />
   );
 }

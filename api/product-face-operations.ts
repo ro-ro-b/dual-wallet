@@ -38,6 +38,10 @@ import {
   type FaceRequestContext,
 } from "@/api/product-face-server";
 import {
+  isTicketHostOperation,
+  type TicketHostOperation,
+} from "@/app/_domain/ticket-admission";
+import {
   applyJournalTransition,
   authorityLeft,
   journalOperationStatus,
@@ -197,7 +201,8 @@ export async function selectProduct(
 // ------------------------------------------------------------------ minting
 
 interface MintRequest {
-  operation: RuntimeOperation;
+  /** P4.3: the host's own ticket operations are minted here too. */
+  operation: RuntimeOperation | TicketHostOperation;
   operationId: string;
   target: AssertionTarget;
   requestHash: string;
@@ -230,10 +235,11 @@ export function mint(
   // contract r10: a case operation's audience is the linked Warranty runtime;
   // without one, nothing is minted for it.
   const routed = input.audienceOf ?? input.operation;
-  const linked = isLinkedCaseOperation(routed)
-    ? linkedCaseRuntime(context)
-    : undefined;
-  if (isLinkedCaseOperation(routed) && !linked) {
+  // A ticket operation is always the bound Tickets runtime's own.
+  const caseOperation =
+    !isTicketHostOperation(routed) && isLinkedCaseOperation(routed);
+  const linked = caseOperation ? linkedCaseRuntime(context) : undefined;
+  if (caseOperation && !linked) {
     return fail("case_runtime_not_linked", 409);
   }
   const now = Date.now();

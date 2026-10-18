@@ -8,6 +8,7 @@
 // ended. Anything the rules cannot place is "unconfirmed", never issued, and
 // admission is a constant "unavailable" until P4.3: no state is read as one.
 import { sameHolder } from "@/app/_domain/product-face";
+import type { AdmissionRules } from "@/app/_domain/ticket-admission";
 
 /** Dotted custom paths the binding assigns to each ticket fact. */
 export interface TicketFieldRules {
@@ -24,6 +25,11 @@ export interface TicketFieldRules {
 export interface TicketRules {
   fields: TicketFieldRules;
   states: { pending: string[]; issued: string[]; ended: string[] };
+  /**
+   * P4.3 ticket-admission-v1: present only when the binding states the
+   * contract exactly; absent, entry is unavailable (P4.2 unchanged).
+   */
+  admission?: AdmissionRules;
 }
 
 /**

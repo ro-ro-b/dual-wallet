@@ -10,6 +10,7 @@ import {
 import type { NextRequest } from "next/server";
 import type { ProductFaceBinding } from "@/api/product-face-binding";
 import type { RuntimeOperation } from "@/app/_domain/product-face";
+import type { TicketHostOperation } from "@/app/_domain/ticket-admission";
 
 export const ASSERTION_TYPE = "dual-face-assertion+jwt";
 export const ASSERTION_LIFETIME_SECONDS = 60;
@@ -81,7 +82,8 @@ export interface FaceAssertionInput {
   binding: ProductFaceBinding;
   walletId: string;
   holder: string;
-  operation: RuntimeOperation;
+  /** A face runtime operation, or (P4.3) one of the host's own ticket operations. */
+  operation: RuntimeOperation | TicketHostOperation;
   operationId: string;
   target: AssertionTarget;
   requestHash: string;

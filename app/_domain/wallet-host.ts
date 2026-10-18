@@ -319,6 +319,8 @@ export function journeyOfJournalEntry(entry: {
     return "registration";
   }
   if (entry.kind === "transfer") return "transfer";
+  // P4.3: an admission step belongs to the Tickets journey; no other flag.
+  if (entry.kind === "admission") return "tickets";
   if (
     entry.kind === "runtime" &&
     typeof entry.operation === "string" &&

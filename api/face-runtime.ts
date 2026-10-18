@@ -4,6 +4,10 @@ import { fetchBounded } from "@/api/face-artifact";
 import { sha256Hash, type AssertionTarget } from "@/api/face-assertion";
 import type { ProductFaceBinding } from "@/api/product-face-binding";
 import {
+  isTicketHostOperation,
+  type TicketHostOperation,
+} from "@/app/_domain/ticket-admission";
+import {
   canonicalJson,
   isCaseId,
   isCurrencyCode,
@@ -1511,4 +1515,73 @@ export function parseCaseQuote(
     amount: quote.amount,
     currency: quote.currency,
   };
+}
+
+/**
+ * P4.3 ticket-admission-v1 (docs/development/p4-3-admission-contract.md §5):
+ * one call to the bound Tickets runtime on the fixed endpoint, for exactly
+ * the host's own six ticket operations, with one operation-bound assertion.
+ * Bounded, no cookies, no redirects; the caller parses a narrow projection.
+ */
+export async function ticketRuntimeCall(
+  binding: Pick<ProductFaceBinding, "origin" | "applicationId">,
+  request: {
+    operation: TicketHostOperation;
+    operationId: string;
+    target: { object_id: string };
+    input: Record<string, unknown>;
+  },
+  assertion: string,
+): Promise<TransferRuntimeResult> {
+  if (!isTicketHostOperation(request.operation)) {
+    return { ok: false, code: "runtime_refused" };
+  }
+  return runtimeOperationCall(binding, request, assertion);
+}
+
+export type AdmissionReserveResult =
+  /** This request alone created the runtime's one claim for the request. */
+  | { outcome: "won" }
+  /** Anything else, a replay included: never execute; status only. */
+  | { outcome: "not_won"; reached: boolean; status: string | null };
+
+/**
+ * admission.reserve (§5.4): won only on this request's own 200 granted
+ * dispatch:"won" for exactly this operation, ticket, proposal and request.
+ */
+export function admissionReserveOutcome(
+  result: TransferRuntimeResult,
+  expected: {
+    operationId: string;
+    objectId: string;
+    proposalId: string;
+    requestId: string;
+  },
+): AdmissionReserveResult {
+  if (!result.ok) {
+    return {
+      outcome: "not_won",
+      reached: result.code !== "runtime_unavailable",
+      status: result.reason ?? null,
+    };
+  }
+  const body = result.body;
+  const reservation = record(body.reservation) ? body.reservation : {};
+  const won =
+    result.status === 200 &&
+    body.ok === true &&
+    body.status === "granted" &&
+    body.dispatch === "won" &&
+    body.idempotent !== true &&
+    reservation.admission_operation_id === expected.operationId &&
+    reservation.object_id === expected.objectId &&
+    reservation.proposal_id === expected.proposalId &&
+    reservation.request_id === expected.requestId;
+  return won
+    ? { outcome: "won" }
+    : {
+        outcome: "not_won",
+        reached: true,
+        status: typeof body.status === "string" ? body.status : null,
+      };
 }

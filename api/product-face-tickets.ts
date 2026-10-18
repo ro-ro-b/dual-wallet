@@ -149,14 +149,31 @@ export async function readTicket(
   rules: TicketRules,
   objectId: string,
 ): Promise<TicketReadResult> {
+  const result = await readTicketWithCustom(context, rules, objectId);
+  return result.ok ? { ok: true, ticket: result.ticket } : result;
+}
+
+/**
+ * The ticket and the object's own custom map from the same fresh read
+ * (P4.3: an admission proposal is checked against exactly this map).
+ */
+export async function readTicketWithCustom(
+  context: FaceRequestContext,
+  rules: TicketRules,
+  objectId: string,
+): Promise<
+  | { ok: true; ticket: Ticket; custom: unknown }
+  | { ok: false; code: TicketReadFailure }
+> {
   let source;
+  let custom: unknown;
   try {
-    source = toTicketSource(
-      await getObjectsApi(context.state.accessToken).getObjectById(
-        { objectId },
-        { cache: "no-store" },
-      ),
+    const object = await getObjectsApi(context.state.accessToken).getObjectById(
+      { objectId },
+      { cache: "no-store" },
     );
+    custom = object.custom;
+    source = toTicketSource(object);
   } catch (error) {
     const code = status(error);
     if (code === 401) return { ok: false, code: "session_expired" };
@@ -166,6 +183,6 @@ export async function readTicket(
   if (source.objectId !== objectId) return { ok: false, code: "not_found" };
   const evaluated = evaluateTicket(source, evaluation(context, rules));
   return evaluated.ok
-    ? { ok: true, ticket: evaluated.ticket }
+    ? { ok: true, ticket: evaluated.ticket, custom }
     : { ok: false, code: evaluated.refusal };
 }

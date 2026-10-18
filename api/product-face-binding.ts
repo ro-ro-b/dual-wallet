@@ -11,6 +11,7 @@ import {
   type SettleRules,
   type TransferRequestRules,
 } from "../app/_domain/product-face";
+import { parseAdmissionRules } from "../app/_domain/ticket-admission";
 import type { TicketRules } from "../app/_domain/tickets";
 
 /**
@@ -94,7 +95,7 @@ const BINDING_KEYS = [
   "tickets",
   "handover",
 ] as const;
-const TICKET_KEYS = ["fields", "states"] as const;
+const TICKET_KEYS = ["fields", "states", "admission"] as const;
 const TICKET_FIELD_KEYS = [
   "event",
   "startsAt",
@@ -385,6 +386,9 @@ function ticketRules(value: unknown): TicketRules | null | undefined {
   if (value === undefined) return null;
   if (!record(value) || !onlyKeys(value, TICKET_KEYS)) return undefined;
   const { fields, states } = value;
+  // P4.3 ticket-admission-v1: optional, and only ever exactly the contract.
+  const admission = parseAdmissionRules(value.admission);
+  if (admission === undefined) return undefined;
   if (
     !record(fields) ||
     !onlyKeys(fields, TICKET_FIELD_KEYS) ||
@@ -449,6 +453,7 @@ function ticketRules(value: unknown): TicketRules | null | undefined {
       state,
     },
     states: { pending, issued, ended },
+    ...(admission ? { admission } : {}),
   };
 }
 

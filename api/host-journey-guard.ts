@@ -131,9 +131,13 @@ export async function classifyFaceRequest(
       return journey("transfer");
     case "execution": {
       // The bound journal entry's kind: a settle step is registration's, a
-      // transfer step transfer's. No such entry: not a face step at all.
+      // transfer step transfer's, an admission step (P4.3) the Tickets
+      // journey's. No such entry: not a face step at all.
       const entry = find(request.headers.get(FACE_EXECUTION_OPERATION_HEADER));
-      return entry && (entry.kind === "settle" || entry.kind === "transfer")
+      return entry &&
+        (entry.kind === "settle" ||
+          entry.kind === "transfer" ||
+          entry.kind === "admission")
         ? ofEntry(entry)
         : UNCLASSIFIED;
     }

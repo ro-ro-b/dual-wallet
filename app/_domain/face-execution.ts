@@ -68,6 +68,10 @@ export function faceEntryAction(entry: FaceJournalEntry) {
   if (entry.kind === "settle") {
     return SETTLE_ACTIONS.has(entry.operation) ? entry.operation : undefined;
   }
+  // P4.3: the admission step's one update of its own ticket.
+  if (entry.kind === "admission") {
+    return entry.operation === "update" ? "update" : undefined;
+  }
   if (entry.kind === "transfer") {
     return entry.operation === "transfer.request"
       ? "update"

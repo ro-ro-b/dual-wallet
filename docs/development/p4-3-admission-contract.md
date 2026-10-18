@@ -356,3 +356,30 @@ object_id, proposal_id, request_id } }` exactly once. A replay of the same
 2. The wallet stores no issuance proof: "identical before and after
    admission" is the runtime returning the same `birth_operation_id` and
    `birth_action_id` on each call, which the wallet checks and shows.
+
+## 11. Wallet implementation status (source only)
+
+The wallet half of this contract is implemented in source and proven only
+against LOCAL FICTIONAL fakes of the shared Tickets service and Dual; nothing
+here is live, and the matching runtime leg is Studio's to implement.
+
+- Binding: optional `tickets.admission`, parsed exactly
+  (`app/_domain/ticket-admission.ts` `parseAdmissionRules`); absent keeps
+  P4.2 unchanged.
+- BFF: `POST /api/faces/<slug>/tickets/<objectId>/admission` with
+  `transition` `check`, `pass`, `begin`, `confirm`, `cancel`,
+  `record_action`, `status` (`api/product-face-admission.ts`). Runtime calls
+  through `ticketRuntimeCall` (`api/face-runtime.ts`), host-only operations
+  (`ticketHostOperations`), minted by the existing `mint`.
+- Journal kind `admission` (`app/_domain/product-face-journal.ts`), bound
+  to `admissionRequestId`, `proposalId`, `freshHash` and `inputHash`; a sent
+  step is unresolved evidence a launch never drops (`api/face-journal.ts`).
+- `/api/backend` forwards an admission step only for its own won reservation
+  and only with exactly the confirmed custom map
+  (`api/face-execution-binding.ts`); on a branded host it is the Tickets
+  journey's (`api/host-journey-guard.ts`).
+- Native page: `app/_components/products/ticket-admission.tsx` on the ticket
+  detail when the binding carries `admission`.
+- Tests: `api/product-face-admission.test.ts` (real handlers, journal and
+  proxy), `app/_domain/ticket-admission.test.ts`,
+  `app/_components/products/ticket-admission.test.tsx`.

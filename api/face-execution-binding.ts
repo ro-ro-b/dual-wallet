@@ -18,7 +18,37 @@ import {
   FACE_EXECUTION_WALLET_HEADER,
   faceExecutionBodyMatches,
 } from "@/app/_domain/face-execution";
-import { isOperationId } from "@/app/_domain/product-face";
+import { canonicalJson, isOperationId } from "@/app/_domain/product-face";
+import {
+  signedStepKind,
+  type FaceJournalEntry,
+} from "@/app/_domain/product-face-journal";
+import { sha256Hash } from "@/api/face-assertion";
+
+/** The admission update's `data.custom`, exactly the bound map, and nothing more. */
+function admissionBodyMatches(body: unknown, entry: FaceJournalEntry) {
+  const update = (body as { action?: { update?: unknown } }).action?.update;
+  if (!update || typeof update !== "object" || Array.isArray(update)) {
+    return false;
+  }
+  const { id, data, ...rest } = update as Record<string, unknown>;
+  if (
+    id !== entry.objectId ||
+    Object.values(rest).some((value) => value !== undefined && value !== null)
+  ) {
+    return false;
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const { custom, ...others } = data as Record<string, unknown>;
+  if (Object.keys(others).length || !custom || typeof custom !== "object") {
+    return false;
+  }
+  try {
+    return sha256Hash(canonicalJson(custom)) === entry.inputHash;
+  } catch {
+    return false;
+  }
+}
 
 export type FaceExecutionDecision =
   | { bound: false }
@@ -105,7 +135,7 @@ export async function bindFaceExecution(
   const entry = context.journal.entries.find(
     (item) => item.operationId === operationId,
   );
-  if (!entry || (entry.kind !== "settle" && entry.kind !== "transfer")) {
+  if (!entry || !signedStepKind(entry.kind)) {
     return refuseIn("face_execution_unbound", 409);
   }
   if (
@@ -116,6 +146,11 @@ export async function bindFaceExecution(
     return refuseIn("face_execution_not_pending", 409);
   }
   if (!faceExecutionBodyMatches(parsed, entry)) {
+    return refuseIn("face_execution_mismatch", 400);
+  }
+  // P4.3: an admission step signs exactly the custom map it was confirmed
+  // for (its journal's inputHash), never another update of the same ticket.
+  if (entry.kind === "admission" && !admissionBodyMatches(parsed, entry)) {
     return refuseIn("face_execution_mismatch", 400);
   }
   return { bound: true, context };
