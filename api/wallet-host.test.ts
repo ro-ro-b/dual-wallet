@@ -97,6 +97,7 @@ describe("two brand hosts from one build", () => {
         serviceProgress: true,
         quoteDecisions: true,
         transfer: true,
+        tickets: false,
       },
     });
     expect(tidewell).toEqual({
@@ -113,6 +114,7 @@ describe("two brand hosts from one build", () => {
         serviceProgress: false,
         quoteDecisions: false,
         transfer: false,
+        tickets: false,
       },
     });
   });

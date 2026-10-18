@@ -20,6 +20,7 @@ import {
   journeysOfTask,
   type HostHomeView,
   type HostJourney,
+  type HostJourneys,
   type HostPresentation,
 } from "@/app/_domain/wallet-host";
 
@@ -158,7 +159,8 @@ export function hostMetadata(): Metadata | undefined {
  */
 export function hostJourneyEnabled(journey: HostJourney) {
   const host = walletHost();
-  if (host.status === "absent") return true;
+  // Tickets are opt-in: the generic wallet never serves them.
+  if (host.status === "absent") return journey !== "tickets";
   return host.status === "active" && host.configuration.journeys[journey];
 }
 
@@ -167,6 +169,18 @@ export function hostFaceEnabled(slug: string) {
   const host = walletHost();
   if (host.status === "absent") return true;
   return host.status === "active" && host.configuration.faces.includes(slug);
+}
+
+/**
+ * Whether this face serves Tickets here: a configured host that enabled the
+ * journey, a face of that host, and a binding that declares ticket rules.
+ */
+export function ticketsServedBy(binding: { slug: string; tickets: unknown }) {
+  return (
+    hostJourneyEnabled("tickets") &&
+    hostFaceEnabled(binding.slug) &&
+    binding.tickets !== null
+  );
 }
 
 /** Where a request for a page a configured host does not serve is sent. */
@@ -306,6 +320,10 @@ function engineCommit(): string | null {
   return null;
 }
 
+function readbackJourneys({ tickets, ...rest }: HostJourneys) {
+  return tickets ? { ...rest, tickets } : rest;
+}
+
 /**
  * GET /api/host/configuration: what this deployment serves, for Studio and
  * Root to compare with the approved configuration and engine release. Public
@@ -323,7 +341,9 @@ export function hostReadback() {
       host.status === "absent" ? null : host.configurationSha256,
     configVersion: configuration?.release.configVersion ?? null,
     engine: { version: packageJson.version, commit: engineCommit() },
-    journeys: configuration ? { ...configuration.journeys } : null,
+    // `tickets` is reported only for a host that enabled it, so the readback
+    // of every host that predates it is unchanged.
+    journeys: configuration ? readbackJourneys(configuration.journeys) : null,
     faces: configuration ? [...configuration.faces] : null,
     status: host.status,
   };

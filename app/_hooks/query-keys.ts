@@ -19,6 +19,16 @@ export const queryKeys = {
     context: (slug: string, launchId: string) =>
       ["product-faces", "context", { slug, launchId }] as const,
   },
+  // Tickets are the current holder's own: every key names the wallet, the
+  // programme and (for a list) the cursor, so an account change reads nothing
+  // of the previous one.
+  tickets: {
+    all: ["tickets"] as const,
+    list: (input: { slug: string; walletId: string }) =>
+      ["tickets", "list", input] as const,
+    detail: (input: { slug: string; walletId: string; objectId: string }) =>
+      ["tickets", "detail", input] as const,
+  },
   activity: {
     all: ["activity"] as const,
     page: (input: {

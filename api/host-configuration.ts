@@ -21,6 +21,7 @@ import {
   isHostFontFamily,
   isHostJourney,
   isHostNavigationEntry,
+  requiredHostJourneys,
   type HostColours,
   type HostFontFamily,
   type HostJourney,
@@ -259,6 +260,10 @@ export function bindingBacksJourney(
       return binding.linkedRuntimes.some(
         (runtime) => runtime.purpose === "claims-warranty",
       );
+    case "tickets":
+      // Tickets read the holder's own objects through the binding's declared
+      // ticket rules; without them the face has no canonical projection.
+      return binding.tickets !== null;
     case "transfer":
       // transfer.sign needs the request template; the recipient accepts
       // through the wallet's handover entry.
@@ -333,13 +338,23 @@ function validate(
   }
 
   const journeys = value.journeys;
+  // The five original journeys are always stated; `tickets` is opt-in and an
+  // absent key is false (so older configurations stay valid unchanged).
   if (
-    !exactKeys(journeys, hostJourneys) ||
-    !hostJourneys.every((journey) => typeof journeys[journey] === "boolean")
+    !record(journeys) ||
+    !Object.keys(journeys).every((key) => isHostJourney(key)) ||
+    !requiredHostJourneys.every(
+      (journey) => typeof journeys[journey] === "boolean",
+    ) ||
+    (Object.hasOwn(journeys, "tickets") &&
+      typeof journeys.tickets !== "boolean")
   ) {
     return invalid("journeys");
   }
-  const enabled = journeys as HostJourneys;
+  const enabled = {
+    ...(journeys as Partial<HostJourneys>),
+    tickets: journeys.tickets === true,
+  } as HostJourneys;
   // A quote decision is a decision on a service case.
   if (enabled.quoteDecisions && !enabled.serviceProgress) {
     return invalid("journeys");

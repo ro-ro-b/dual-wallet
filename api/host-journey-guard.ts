@@ -27,6 +27,8 @@ export type FaceRoute =
   | "transfer-proposal"
   | "transfer-progress"
   | "accept-offer"
+  /** The Tickets journey's read-only list and detail (P4.2). */
+  | "tickets"
   /** A face's holder-signed step through /api/backend (contract r18). */
   | "execution"
   /**
@@ -121,6 +123,8 @@ export async function classifyFaceRequest(
     case "units":
     case "settle-proposal":
       return journey("registration");
+    case "tickets":
+      return journey("tickets");
     case "transfer-proposal":
     case "transfer-progress":
     case "accept-offer":

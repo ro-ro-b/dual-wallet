@@ -6,16 +6,26 @@ import { isTaskPath, type RuntimeOperation } from "@/app/_domain/product-face";
 
 export const HOST_CONFIGURATION_SCHEMA = "dual-wallet-host-configuration-v1";
 
-/** The ownership/aftercare journeys a host enables (the contract's order). */
+/**
+ * The journeys a host enables (the contract's order). `tickets` is opt-in: a
+ * configuration may omit its key, which is the same as false, so every
+ * configuration written before it existed keeps its canonical bytes.
+ */
 export const hostJourneys = [
   "registration",
   "myProducts",
   "serviceProgress",
   "quoteDecisions",
   "transfer",
+  "tickets",
 ] as const;
 export type HostJourney = (typeof hostJourneys)[number];
 export type HostJourneys = Record<HostJourney, boolean>;
+
+/** The journeys every configuration states; the rest are opt-in keys. */
+export const requiredHostJourneys: readonly HostJourney[] = hostJourneys.filter(
+  (journey) => journey !== "tickets",
+);
 
 /**
  * The Dual actions that move an object's custody: hand it over (transfer),
@@ -343,6 +353,8 @@ export function journeysOfTask(task: string): HostJourney[] | undefined {
       return ["serviceProgress"];
     case "accept":
       return ["transfer"];
+    case "tickets":
+      return ["tickets"];
     default:
       return undefined;
   }
@@ -355,6 +367,7 @@ export const hostJourneyTasks: Record<HostJourney, string> = {
   serviceProgress: "/service",
   quoteDecisions: "/service",
   transfer: "/",
+  tickets: "/tickets",
 };
 
 export const hostNavigationHrefs: Record<HostNavigationEntry, string> = {

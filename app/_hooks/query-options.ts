@@ -13,6 +13,7 @@ import {
 } from "@/app/_services/inventory.client";
 import { loadProductFaceContext } from "@/app/_services/product-face.client";
 import { loadSession } from "@/app/_services/session.client";
+import { getTicket, listTicketsPage } from "@/app/_services/tickets.client";
 
 // ponytail: one fixed interval, no server-driven expiry hint. Shorten this if
 // the API refresh-token lifetime ever drops below ~10 minutes.
@@ -64,6 +65,54 @@ export function activityQueryOptions(
       ? ({ signal }) =>
           listActivityPage({ search, status, walletId, cursor, signal })
       : skipToken,
+  });
+}
+
+// A ticket's status is read fresh: never kept past a reload or reopen, and a
+// failed read is retried by the user, not silently.
+const TICKETS_STALE_MS = 15_000;
+
+export function ticketsQueryOptions(input: {
+  slug: string;
+  launchId: string;
+  walletId?: string;
+}) {
+  const { slug, launchId, walletId } = input;
+  // The launch id only scopes this tab's BFF reads; it does not change the
+  // result, so it stays out of the key.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  return infiniteQueryOptions({
+    queryKey: queryKeys.tickets.list({ slug, walletId: walletId ?? "" }),
+    initialPageParam: undefined as string | undefined,
+    queryFn: walletId
+      ? ({ pageParam, signal }) =>
+          listTicketsPage({ slug, launchId, cursor: pageParam, signal })
+      : skipToken,
+    getNextPageParam: (page) => page.next ?? undefined,
+    staleTime: TICKETS_STALE_MS,
+    retry: false,
+  });
+}
+
+export function ticketQueryOptions(input: {
+  slug: string;
+  launchId: string;
+  walletId?: string;
+  objectId: string;
+}) {
+  const { slug, launchId, walletId, objectId } = input;
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  return queryOptions({
+    queryKey: queryKeys.tickets.detail({
+      slug,
+      walletId: walletId ?? "",
+      objectId,
+    }),
+    queryFn: walletId
+      ? ({ signal }) => getTicket({ slug, launchId, objectId, signal })
+      : skipToken,
+    staleTime: TICKETS_STALE_MS,
+    retry: false,
   });
 }
 

@@ -125,7 +125,12 @@ describe("an active configuration", () => {
     const state = evaluateHostConfiguration(input);
     if (state.status !== "active") throw new Error(JSON.stringify(state));
     expect(state.configurationSha256).toBe(sha256(input.raw!));
-    expect(state.configuration).toEqual(sealHost(morrowDocument()).document);
+    // A configuration that does not mention Tickets parses with it off.
+    const sealed = sealHost(morrowDocument()).document;
+    expect(state.configuration).toEqual({
+      ...sealed,
+      journeys: { ...(sealed.journeys as object), tickets: false },
+    });
     expect(Buffer.from(state.logo).toString("base64")).toBe(
       (morrowDocument().identity as { logo: { dataBase64: string } }).logo
         .dataBase64,

@@ -430,6 +430,46 @@
     "deleteAction": "Permanently delete account",
     "deleteConfirmValue": "DELETE"
   },
+  "tickets": {
+    "title": "Your tickets",
+    "description": "The tickets your account holds, as Dual records them. This page only shows them; nothing here changes a ticket.",
+    "detailEyebrow": "Ticket",
+    "loading": "Loading your tickets…",
+    "loadMore": "Show more tickets",
+    "emptyTitle": "No tickets in this account",
+    "emptyDescription": "Tickets issued to this account appear here. If you expect one, check that you are signed in with the account the tickets were issued to.",
+    "open": "Open ticket for {event}",
+    "back": "All tickets",
+    "factsTitle": "Event and ticket",
+    "when": "When",
+    "where": "Where",
+    "entryClass": "Ticket class",
+    "issueReference": "Issue reference",
+    "notStated": "Not stated",
+    "notRecorded": "Not recorded",
+    "entryTitle": "Getting in",
+    "admissionUnavailable": "Entry check-in is not available in this wallet yet. Having a ticket here does not mean it has been used or checked in.",
+    "status": {
+      "issued": "Issued",
+      "pending": "Being issued",
+      "ended": "No longer valid",
+      "unconfirmed": "Not confirmed"
+    },
+    "statusExplanation": {
+      "issued": "Dual records this ticket as issued to your account.",
+      "pending": "This ticket is still being issued. It is not valid yet; check back shortly.",
+      "ended": "This ticket is no longer valid.",
+      "unconfirmed": "Dual holds this ticket for your account, but its issue could not be confirmed. Do not rely on it yet."
+    },
+    "failure": {
+      "session_expired": "Your session has ended. Nothing was changed.",
+      "signIn": "Sign in again",
+      "not_found": "This ticket isn't held by your account, so it can't be shown here.",
+      "capability_not_granted": "Tickets aren't available in this wallet.",
+      "unavailable": "We couldn't read your tickets right now. This doesn't mean you have none.",
+      "retry": "Try again"
+    }
+  },
   "products": {
     "eyebrow": "Programmes",
     "title": "Products",
@@ -630,7 +670,8 @@
       "myProducts": "See my products",
       "serviceProgress": "Follow a service",
       "quoteDecisions": "Review a quote",
-      "transfer": "Pass on a product"
+      "transfer": "Pass on a product",
+      "tickets": "See my tickets"
     },
     "setupTitle": "This wallet is being set up",
     "setupDescription": "It is not open yet. Nothing was signed in or changed. Please try again later.",

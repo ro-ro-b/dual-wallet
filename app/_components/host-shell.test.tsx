@@ -29,6 +29,7 @@ const journeys = {
   serviceProgress: true,
   quoteDecisions: true,
   transfer: true,
+  tickets: false,
 };
 
 // The presentations api/wallet-host.ts hands the shells for the two fixture

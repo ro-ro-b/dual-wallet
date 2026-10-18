@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { productFaceBinding } from "@/api/product-face-registry";
-import { ProductFaceHost } from "@/app/_components/products/product-face-host";
+import { ProductFaceSlot } from "@/app/_components/products/product-face-slot";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export default async function ProductFaceLayout({
   if (!productFaceBinding(slug)) notFound();
   return (
     <>
-      <ProductFaceHost slug={slug} />
+      <ProductFaceSlot slug={slug} />
       {children}
     </>
   );

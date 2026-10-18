@@ -32,6 +32,7 @@ const host = (transfer: boolean): HostPresentation => ({
     serviceProgress: false,
     quoteDecisions: false,
     transfer,
+    tickets: false,
   },
 });
 

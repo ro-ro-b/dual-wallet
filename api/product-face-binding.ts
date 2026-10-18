@@ -11,6 +11,7 @@ import {
   type SettleRules,
   type TransferRequestRules,
 } from "../app/_domain/product-face";
+import type { TicketRules } from "../app/_domain/tickets";
 
 /**
  * contract r10: a Warranty runtime explicitly connected to this Passport
@@ -41,6 +42,12 @@ export interface ProductFaceBinding {
   /** G8 request step template; absent: transfer.sign is not granted. */
   transferRequest: TransferRequestRules | null;
   linkedRuntimes: LinkedRuntime[];
+  /**
+   * P4.2: where an event ticket's facts and state sit on the programme's
+   * objects. Absent: the Tickets journey has no canonical projection for
+   * this face and the wallet serves none (fail closed).
+   */
+  tickets: TicketRules | null;
   /**
    * contract r14: whether face-enabled handover links may enter this
    * programme's face through /products/<slug>/handover. Off unless the
@@ -84,8 +91,20 @@ const BINDING_KEYS = [
   "settle",
   "transferRequest",
   "linkedRuntimes",
+  "tickets",
   "handover",
 ] as const;
+const TICKET_KEYS = ["fields", "states"] as const;
+const TICKET_FIELD_KEYS = [
+  "event",
+  "startsAt",
+  "venue",
+  "entryClass",
+  "entryGuidance",
+  "issueOperation",
+  "state",
+] as const;
+const TICKET_STATE_KEYS = ["pending", "issued", "ended"] as const;
 const LINKED_RUNTIME_KEYS = [
   "purpose",
   "applicationId",
@@ -357,6 +376,82 @@ function linkedRuntimes(
     : undefined;
 }
 
+/**
+ * The ticket rules: `event`, `issueOperation` and `state` paths are required,
+ * the other facts optional (null), every path distinct, and the three state
+ * lists disjoint with at least one issued state. Absent is null (no Tickets).
+ */
+function ticketRules(value: unknown): TicketRules | null | undefined {
+  if (value === undefined) return null;
+  if (!record(value) || !onlyKeys(value, TICKET_KEYS)) return undefined;
+  const { fields, states } = value;
+  if (
+    !record(fields) ||
+    !onlyKeys(fields, TICKET_FIELD_KEYS) ||
+    !record(states) ||
+    !onlyKeys(states, TICKET_STATE_KEYS)
+  ) {
+    return undefined;
+  }
+  const path = (item: unknown) =>
+    typeof item === "string" && FIELD_PATH.test(item) ? item : undefined;
+  const optionalPath = (item: unknown) =>
+    item === undefined || item === null ? null : path(item);
+  const event = path(fields.event);
+  const issueOperation = path(fields.issueOperation);
+  const state = path(fields.state);
+  const startsAt = optionalPath(fields.startsAt);
+  const venue = optionalPath(fields.venue);
+  const entryClass = optionalPath(fields.entryClass);
+  const entryGuidance = optionalPath(fields.entryGuidance);
+  const pending = uniqueStrings(states.pending, stateName, { min: 0 });
+  const issued = uniqueStrings(states.issued, stateName);
+  const ended = uniqueStrings(states.ended, stateName, { min: 0 });
+  if (
+    !event ||
+    !issueOperation ||
+    !state ||
+    startsAt === undefined ||
+    venue === undefined ||
+    entryClass === undefined ||
+    entryGuidance === undefined ||
+    !pending ||
+    !issued ||
+    !ended
+  ) {
+    return undefined;
+  }
+  const paths = [
+    event,
+    issueOperation,
+    state,
+    startsAt,
+    venue,
+    entryClass,
+    entryGuidance,
+  ].filter((item): item is string => item !== null);
+  const names = [...pending, ...issued, ...ended];
+  // One path per fact, and a state means exactly one thing.
+  if (
+    new Set(paths).size !== paths.length ||
+    new Set(names).size !== names.length
+  ) {
+    return undefined;
+  }
+  return {
+    fields: {
+      event,
+      startsAt,
+      venue,
+      entryClass,
+      entryGuidance,
+      issueOperation,
+      state,
+    },
+    states: { pending, issued, ended },
+  };
+}
+
 /** Exactly {enabled: boolean}; absent is off. Anything else is invalid. */
 function handoverRule(value: unknown): { enabled: boolean } | undefined {
   if (value === undefined) return { enabled: false };
@@ -432,6 +527,8 @@ function binding(
   if (linked.some((item) => item.applicationId === applicationId)) {
     return undefined;
   }
+  const tickets = ticketRules(value.tickets);
+  if (tickets === undefined) return undefined;
   const handover = handoverRule(value.handover);
   if (!handover) return undefined;
   return {
@@ -450,6 +547,7 @@ function binding(
     settle,
     transferRequest,
     linkedRuntimes: linked,
+    tickets,
     handover,
   };
 }
