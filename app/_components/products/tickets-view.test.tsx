@@ -8,7 +8,8 @@ jest.mock("next-intl", () => {
   return {
     useTranslations: (namespace: string) => translations(namespace),
     useFormatter: () => ({
-      dateTime: (value: Date) => `formatted:${value.toISOString()}`,
+      dateTime: (value: Date, options: { timeZoneName?: string }) =>
+        `formatted:${value.toISOString()}${options.timeZoneName ? ` (${options.timeZoneName} zone)` : ""}`,
     }),
   };
 });
@@ -83,9 +84,9 @@ describe("the ticket list", () => {
       }),
     );
     view();
-    const link = await screen.findByRole("link", {
-      name: "Open ticket for Harbour Night",
-    });
+    // The link's name is its visible content (title, time, class, status).
+    const link = await screen.findByRole("link", { name: /Harbour Night/ });
+    expect(link.getAttribute("aria-label")).toBeNull();
     expect(link.getAttribute("href")).toBe(
       `/products/morrow-home/tickets/${TICKET}`,
     );
@@ -166,6 +167,10 @@ describe("one ticket", () => {
     view({ objectId: TICKET });
     expect(
       await screen.findByRole("heading", { level: 1, name: "Harbour Night" }),
+    ).toBeTruthy();
+    // The event time names its time zone rather than leaving it implied.
+    expect(
+      screen.getByText(/formatted:2026-11-20T19:30:00.000Z \(short zone\)/),
     ).toBeTruthy();
     expect(screen.getByText("Quay Hall")).toBeTruthy();
     expect(screen.getByText("Standing")).toBeTruthy();

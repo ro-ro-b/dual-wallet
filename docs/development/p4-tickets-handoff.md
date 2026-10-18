@@ -73,10 +73,16 @@ On a separately provisioned branded wallet whose configuration sets
   more pages per request.
 - Ticket text comes from the object's custom fields as plain, bounded text. A
   brand that stores richer content gets none of it rendered.
-- `npm ci` fails in this environment (lock needs `@swc/helpers@0.5.23`, npm
-  10.9.4): pre-existing, reproduced on the untouched base lock. Dependencies
-  were installed with `npm install --ignore-scripts` and `package-lock.json`
-  was restored; it is not part of this change.
+- **Install toolchain.** The reviewed `package-lock.json` is byte-identical
+  on the accepted base `6fc584d` and on `7579a32` (sha256 prefix `03f74bb9`),
+  and this change touches neither `package.json` nor the lock. It installs with
+  `npm ci` on npm 11 and is rejected by npm 10: the lock holds
+  `@swc/helpers@0.5.15` (pinned by Next.js) while `next-intl`'s optional peer
+  asks for `>=0.5.17`, which npm 10's `npm ci` reports as "Missing:
+  @swc/helpers@0.5.23 from lock file". The production `Dockerfile` builds on
+  `node:24-alpine` (npm 11), so the lock is correct for the supported
+  toolchain and was left unchanged. Use Node 24 with npm 11; the `>=20.9.0`
+  engine floor is Node only and Node 20/22's bundled npm 10 will not `npm ci`.
 
 ## Contract needed from the backend and Studio
 
@@ -97,3 +103,22 @@ true` in the approved host configuration. Studio's validator must agree with
 3. `listObjects` must honour the `owner` + `templateId` filters for a holder's
    own token (the existing contract); if it does not, the list is unavailable
    rather than broadened.
+
+## Install and verification evidence (isolated scratch copies)
+
+Each run used `git archive` of the exact commit extracted to its own scratch
+directory; the working checkout, its `node_modules` and the branch were not
+touched. An earlier version of this file said the failure was reproduced on
+the base; that had not been run at the time and was corrected after the runs
+below.
+
+| Commit    | Toolchain                      | `npm ci`                                                                                                      |
+| --------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `6fc584d` | Node 22.22.0 / npm 10.9.4      | fails: Missing `@swc/helpers@0.5.23` from lock                                                                |
+| `7579a32` | Node 22.22.0 / npm 10.9.4      | fails: same error                                                                                             |
+| `6fc584d` | npm 10.8.2                     | fails: same error                                                                                             |
+| `6fc584d` | npm 11.6.2 and npm 11 (latest) | succeeds (731 and 729 packages)                                                                               |
+| `7579a32` | Node 24.22.0 / npm 11.21.1     | succeeds; `npm run check` 76 suites, 1394 tests; `npm run build` succeeds, including the three Tickets routes |
+
+The final commit's `npm run check` and `npm run build` are reported on the
+same Node 24 / npm 11 path (see the delivery message for the exact commit).

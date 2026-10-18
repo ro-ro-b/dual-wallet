@@ -438,7 +438,6 @@
     "loadMore": "Show more tickets",
     "emptyTitle": "No tickets in this account",
     "emptyDescription": "Tickets issued to this account appear here. If you expect one, check that you are signed in with the account the tickets were issued to.",
-    "open": "Open ticket for {event}",
     "back": "All tickets",
     "factsTitle": "Event and ticket",
     "when": "When",

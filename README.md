@@ -73,6 +73,10 @@ above apply to it. See [branded wallet hosts](./docs/branded-wallet-hosts.md).
 
 ## Local development
 
+Use Node 24 with npm 11 (the production image's toolchain). The reviewed
+lockfile installs with `npm ci` on npm 11; npm 10 rejects it ("Missing:
+@swc/helpers") because of an optional peer of `next-intl`.
+
 ```bash
 cp .env.example .env.local
 npm ci

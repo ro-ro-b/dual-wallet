@@ -30,9 +30,16 @@ function useStartsAt() {
   const format = useFormatter();
   return (value: string | null) =>
     value
-      ? format.dateTime(new Date(value), {
-          dateStyle: "full",
-          timeStyle: "short",
+      ? // The zone is named: dateStyle/timeStyle cannot, and an event time with
+        // no zone is ambiguous to someone travelling to it.
+        format.dateTime(new Date(value), {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          timeZoneName: "short",
         })
       : null;
 }
@@ -74,14 +81,12 @@ function TicketsFailure({
 }
 
 function TicketCard({ slug, ticket }: { slug: string; ticket: Ticket }) {
-  const t = useTranslations("tickets");
   const startsAt = useStartsAt()(ticket.event.startsAt);
   return (
     <li>
       <Link
         className="card ticket-card"
         href={`/products/${slug}/tickets/${ticket.objectId}`}
-        aria-label={t("open", { event: ticket.event.title })}
       >
         <span className="ticket-card-icon" aria-hidden>
           <TicketIcon size={22} />
