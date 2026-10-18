@@ -352,6 +352,8 @@ describe("journeys, pages and faces", () => {
         { entry: "activity", href: "/activity" },
         { entry: "settings", href: "/settings" },
       ],
+      // No Tickets journey: no Today section on this home.
+      tickets: null,
     });
     resetWalletHostCache();
     applyHostEnvironment(hostEnvironment(tidewellDocument()));

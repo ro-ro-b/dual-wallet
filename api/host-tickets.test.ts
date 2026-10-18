@@ -220,3 +220,32 @@ describe("tickets pages at the request proxy", () => {
     }
   });
 });
+
+describe("the home's Tickets face", () => {
+  function serve(document: HostDocument, registry = withRules()) {
+    resetWalletHostCache();
+    applyHostEnvironment(
+      hostEnvironment(document, { PRODUCT_FACE_APPLICATIONS: registry }),
+    );
+  }
+
+  it("is exactly the face the Tickets journey link names, when the host enabled it", () => {
+    serve(ticketsOn());
+    expect(hostHome()?.tickets).toEqual({
+      slug: "morrow-home",
+      href: "/products/morrow-home/tickets",
+    });
+  });
+
+  it("is absent when Tickets are off, so the home is unchanged", () => {
+    // Rules declared but the journey not enabled.
+    serve(morrowDocument());
+    expect(hostHome()?.tickets).toBeNull();
+    serve(morrowDocument(), JSON.stringify([morrowBinding()]));
+    const home = hostHome();
+    expect(home?.tickets).toBeNull();
+    expect(home?.journeys.map((entry) => entry.journey)).not.toContain(
+      "tickets",
+    );
+  });
+});

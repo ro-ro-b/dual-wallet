@@ -34,6 +34,24 @@ On a separately provisioned branded wallet whose configuration sets
   not found, shown as unavailable. A failed upstream read is "unavailable",
   never "no tickets".
 
+## Today-first home (Tickets hosts)
+
+A returning signed-in customer on a Tickets host sees, under the brand
+headline, their Today, Coming up and Needs attention tickets from the first
+Tickets page, each linking to the exact ticket, and "See all your tickets".
+See [branded wallet hosts: Home and navigation](../branded-wallet-hosts.md#home-and-navigation)
+for the rules. Paths: `app/page.tsx`, `app/_components/host/{host-home,tickets-today}.tsx`,
+`app/_domain/tickets-today.ts`, `HostHomeView.tickets` (`api/wallet-host.ts`,
+`app/_domain/wallet-host.ts`), `messages/en.json` (`host.today`),
+`app/globals.css`; tests `app/_domain/tickets-today.test.ts`,
+`app/_components/host/tickets-today.test.tsx`, `app/page.test.tsx`,
+`api/host-tickets.test.ts`.
+
+Not covered: no browser (Playwright) test. The e2e builds are generic-wallet
+only and a host configuration is a build input, so one needs a branded-host
+Playwright build (a test `WALLET_HOST_CONFIGURATION` with Tickets and a face
+binding with `tickets` rules) and mock-API ticket objects for `listObjects`.
+
 ## Boundaries kept
 
 - Existing brands are unchanged: `tickets` is optional and absent means false;

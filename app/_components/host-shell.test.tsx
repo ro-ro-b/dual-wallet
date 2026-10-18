@@ -191,6 +191,7 @@ const morrowHome: HostHomeView = {
     { entry: "inventory", href: "/inventory" },
     { entry: "settings", href: "/settings" },
   ],
+  tickets: null,
 };
 const tidewellHome: HostHomeView = {
   brand: { brand: TIDEWELL.brand, logo: TIDEWELL.logo },
@@ -199,6 +200,7 @@ const tidewellHome: HostHomeView = {
   primary: { journey: "myProducts", href: "/products/tidewell-care/products" },
   journeys: [],
   navigation: [{ entry: "products", href: "/products" }],
+  tickets: null,
 };
 
 describe("HostHome", () => {

@@ -183,6 +183,23 @@ uses those tokens:
   and every other enabled journey, sign-in links when signed out and the
   configured navigation when signed in. A signed-in visitor with no return
   path lands there.
+- **Today (Tickets hosts only).** When the host enabled Tickets, a visit
+  carrying a session cookie mounts a client island under the headline for
+  exactly the face the Tickets journey link names. The cookie only decides
+  that it is mounted: the island renders nothing until its session read
+  confirms a signed-in wallet, then reads the first Tickets page through the
+  Tickets BFF (session, holder, client and programme re-checked there). It
+  shows **Today** (starting on the viewer's calendar day), **Coming up**
+  (later days, earliest first, at most three) and **Needs attention** (the
+  object's own pending or unconfirmed status), each linking to the exact
+  ticket, plus "See all your tickets". "Today" and every time shown use the
+  viewer's own IANA time zone (`Intl.DateTimeFormat().resolvedOptions()`),
+  named next to each time. It never pages on its own, says when more tickets
+  may exist, and claims nothing for a past or undated ticket. Empty-but-more,
+  none and unavailable are distinct; nothing is retried automatically. Every
+  session end (logout, expiry, account change) remounts it after the
+  provider clears the account's queries. A host without Tickets, and the
+  signed-out home, are unchanged.
 - The shell shows exactly the configured navigation entries, in order.
 - A journey's link is its start task in the first of the host's faces that
   backs it: registration `/register`, My products `/products`, service

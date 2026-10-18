@@ -418,4 +418,9 @@ export interface HostHomeView {
   primary: { journey: HostJourney; href: string };
   journeys: Array<{ journey: HostJourney; href: string }>;
   navigation: Array<{ entry: HostNavigationEntry; href: string }>;
+  /**
+   * The Tickets face the signed-in home reads for Today (its slug and the
+   * full list); null when the host does not serve Tickets.
+   */
+  tickets: { slug: string; href: string } | null;
 }

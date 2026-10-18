@@ -270,6 +270,27 @@ export function hostHome(): HostHomeView | undefined {
       entry,
       href: hostNavigationHrefs[entry],
     })),
+    tickets: homeTickets(host),
+  };
+}
+
+/**
+ * The face whose Tickets the home's Today section reads: exactly the face the
+ * Tickets journey link names (the first of the host's faces backing it), and
+ * only when the host enabled the journey. Never derived from a label, cookie
+ * or request.
+ */
+function homeTickets(
+  host: Extract<HostConfigurationState, { status: "active" }>,
+): HostHomeView["tickets"] {
+  if (!host.configuration.journeys.tickets) return null;
+  const face = host.faces.find((binding) =>
+    bindingBacksJourney(binding, "tickets"),
+  );
+  if (!face || !ticketsServedBy(face)) return null;
+  return {
+    slug: face.slug,
+    href: `/products/${face.slug}${hostJourneyTasks.tickets}`,
   };
 }
 

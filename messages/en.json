@@ -694,6 +694,23 @@
       "transfer": "Pass on a product",
       "tickets": "See my tickets"
     },
+    "today": {
+      "title": "Your tickets",
+      "loading": "Checking your tickets…",
+      "today": "Today",
+      "comingUp": "Coming up",
+      "attention": "Needs attention",
+      "seeAll": "See all your tickets",
+      "partial": "Showing the first tickets read from your account. You may have more: see all your tickets.",
+      "nothingDated": "None of the tickets read so far has an event time today or later.",
+      "notFoundYet": "No tickets found yet. Not everything has been checked, so this doesn't mean you have none.",
+      "none": "No tickets in this account.",
+      "unavailable": "We couldn't read your tickets right now. This doesn't mean you have none.",
+      "retry": "Try again",
+      "sessionExpired": "Your session has ended. Nothing was changed.",
+      "signedOut": "Sign in to see your tickets.",
+      "signIn": "Sign in"
+    },
     "setupTitle": "This wallet is being set up",
     "setupDescription": "It is not open yet. Nothing was signed in or changed. Please try again later.",
     "misdirectedTitle": "This wallet is not available at this address",

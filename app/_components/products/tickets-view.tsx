@@ -22,7 +22,7 @@ const statusTone: Record<TicketStatus, string> = {
   unconfirmed: "status-neutral",
 };
 
-function TicketStatusBadge({ status }: { status: TicketStatus }) {
+export function TicketStatusBadge({ status }: { status: TicketStatus }) {
   const t = useTranslations("tickets.status");
   return <span className={`status ${statusTone[status]}`}>{t(status)}</span>;
 }

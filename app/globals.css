@@ -2270,6 +2270,30 @@ html[data-wallet-host] .button-primary {
 .host-home-primary {
   margin: 34px 0 0;
 }
+.tickets-today {
+  margin: 28px 0 0;
+}
+.tickets-today h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+.tickets-today-section {
+  margin-top: 18px;
+}
+.tickets-today-section h3 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+.tickets-today-note,
+.tickets-today-all {
+  margin: 14px 0 0;
+  color: var(--muted);
+}
+.tickets-today-all a {
+  color: var(--brand-strong);
+  font-weight: 700;
+}
 .host-home-journeys {
   display: flex;
   flex-wrap: wrap;
