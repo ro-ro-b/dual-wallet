@@ -18,8 +18,8 @@ const WAITING_FOR_VERIFICATION =
   "Waiting for the programme to verify your last activity. You can record another once it's verified.";
 const PAGE = `/products/${LOYALTY_SLUG}/loyalty`;
 // Set by playwright.loyalty-studio.config.ts: the runtime is Studio's real
-// Loyalty member leg, whose participant custody never creates a membership
-// without the member's own pass.
+// Loyalty member leg on a client Loyalty service, whose staff act only under
+// the client's own grants and never create a membership without its pass.
 const STUDIO_INTEGRATED = process.env.LOYALTY_FIXTURE_STUDIO_INTEGRATED === "1";
 
 async function post(origin: string, path: string, body: unknown = {}) {
@@ -368,16 +368,17 @@ test("a membership without the member's own pass is not active, and nothing can 
   ).toBeVisible();
   await post(runtimeOrigin, "/__test__/approve");
   if (STUDIO_INTEGRATED) {
-    // Studio refuses the passless birth itself (its setup delegation is no
-    // record-scoped operator session) and writes nothing, so the member
-    // still waits for the programme team.
+    // Studio's client Loyalty service refuses the passless birth itself: its
+    // setup delegation is no client staff (only a step under the client's own
+    // staff grant creates a membership, with the member's pass). Nothing is
+    // written, so the member still waits for the programme team.
     const refused = await fetch(`${runtimeOrigin}/__test__/create`, {
       method: "POST",
       body: JSON.stringify({ pass: false }),
     });
     expect(refused.status).toBe(403);
     expect((await refused.json()).status).toBe(
-      "participant_opening_session_scope_required",
+      "loyalty_client_staff_authority_required",
     );
     await page.reload();
     await expect(

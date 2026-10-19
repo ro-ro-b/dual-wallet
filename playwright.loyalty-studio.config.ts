@@ -14,8 +14,9 @@ import { FICTIONAL_ORGANIZATION } from "./e2e/tickets-home/environment.mjs";
 //   STUDIO_LOYALTY_DIR=<Studio checkout> npx playwright test -c playwright.loyalty-studio.config.ts
 // The same e2e/loyalty.spec.ts as playwright.loyalty.config.ts, with the local
 // fake runtime replaced by Studio's REAL Loyalty member leg and record runtime
-// (Studio scripts/loyalty-face-integrated.mjs --serve on localhost:4350: its
-// staff hooks are Studio's own signed role sessions) and the fake api-v3's
+// (Studio scripts/loyalty-face-integrated.mjs --serve on localhost:4350: a
+// client Loyalty service whose staff hooks are client staff steps under the
+// client's own bootstrapped grants) and the fake api-v3's
 // Loyalty provider world forwarded to that driver's FICTIONAL provider
 // (127.0.0.1:4360). The real wallet (next dev) on http://localhost:3340. None
 // of it is Dual, a live Studio, a client or a member.
