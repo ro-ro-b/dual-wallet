@@ -30,8 +30,9 @@
     dependencies they surfaced
 - Proposals (not deployed):
   - [Loyalty join and earn, loyalty-join-earn-v1](./proposals/loyalty-join-earn-v1.md):
-    the proposed native join/earn contract on the existing opening pass and
-    issuer-owned canonical membership, for root review
+    the final native join/earn wire contract on the existing opening pass and
+    issuer-owned canonical membership, the wallet's proof rules (implemented
+    in source, fixtures only) and the live release blockers
   - [Runtime write outcome, recovery listing and acknowledgement, r20](./proposals/runtime-write-status-r20.md):
     the pinned Studio runtime wire schema the wallet needs to free a journal
     slot from a verified write outcome and to recover unresolved or unseen

@@ -29,6 +29,15 @@ export const queryKeys = {
     detail: (input: { slug: string; walletId: string; objectId: string }) =>
       ["tickets", "detail", input] as const,
   },
+  // Loyalty is the current holder's own: every key names the wallet and the
+  // programme, so an account change reads nothing of the previous one.
+  loyalty: {
+    all: ["loyalty"] as const,
+    programme: (input: { slug: string; walletId: string }) =>
+      ["loyalty", "programme", input] as const,
+    membership: (input: { slug: string; walletId: string }) =>
+      ["loyalty", "membership", input] as const,
+  },
   activity: {
     all: ["activity"] as const,
     page: (input: {

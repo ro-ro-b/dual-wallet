@@ -1233,6 +1233,48 @@ button {
   color: var(--muted);
   font-size: 0.85rem;
 }
+.loyalty-section {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 20px;
+  overflow-wrap: anywhere;
+}
+.loyalty-form,
+.loyalty-submission {
+  display: grid;
+  gap: 12px;
+}
+.loyalty-consent {
+  display: flex;
+  min-height: 44px;
+  align-items: flex-start;
+  gap: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.loyalty-consent input {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-top: 3px;
+  accent-color: var(--brand-strong);
+}
+.loyalty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.loyalty-submissions {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.loyalty-submission {
+  padding: 16px;
+}
 .ticket-detail {
   display: grid;
   gap: 12px;

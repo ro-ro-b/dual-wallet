@@ -159,8 +159,10 @@ export function hostMetadata(): Metadata | undefined {
  */
 export function hostJourneyEnabled(journey: HostJourney) {
   const host = walletHost();
-  // Tickets are opt-in: the generic wallet never serves them.
-  if (host.status === "absent") return journey !== "tickets";
+  // Tickets and Loyalty are opt-in: the generic wallet never serves them.
+  if (host.status === "absent") {
+    return journey !== "tickets" && journey !== "loyalty";
+  }
   return host.status === "active" && host.configuration.journeys[journey];
 }
 
@@ -180,6 +182,18 @@ export function ticketsServedBy(binding: { slug: string; tickets: unknown }) {
     hostJourneyEnabled("tickets") &&
     hostFaceEnabled(binding.slug) &&
     binding.tickets !== null
+  );
+}
+
+/**
+ * Whether this face serves Loyalty here: a configured host that enabled the
+ * journey, a face of that host, and a binding with the loyalty block.
+ */
+export function loyaltyServedBy(binding: { slug: string; loyalty: unknown }) {
+  return (
+    hostJourneyEnabled("loyalty") &&
+    hostFaceEnabled(binding.slug) &&
+    binding.loyalty !== null
   );
 }
 
@@ -271,6 +285,7 @@ export function hostHome(): HostHomeView | undefined {
       href: hostNavigationHrefs[entry],
     })),
     tickets: homeTickets(host),
+    loyalty: homeLoyalty(host),
   };
 }
 
@@ -291,6 +306,21 @@ function homeTickets(
   return {
     slug: face.slug,
     href: `/products/${face.slug}${hostJourneyTasks.tickets}`,
+  };
+}
+
+/** The face whose membership card the home shows, as for Tickets. */
+function homeLoyalty(
+  host: Extract<HostConfigurationState, { status: "active" }>,
+): HostHomeView["loyalty"] {
+  if (!host.configuration.journeys.loyalty) return null;
+  const face = host.faces.find((binding) =>
+    bindingBacksJourney(binding, "loyalty"),
+  );
+  if (!face || !loyaltyServedBy(face)) return null;
+  return {
+    slug: face.slug,
+    href: `/products/${face.slug}${hostJourneyTasks.loyalty}`,
   };
 }
 
@@ -341,8 +371,12 @@ function engineCommit(): string | null {
   return null;
 }
 
-function readbackJourneys({ tickets, ...rest }: HostJourneys) {
-  return tickets ? { ...rest, tickets } : rest;
+function readbackJourneys({ tickets, loyalty, ...rest }: HostJourneys) {
+  return {
+    ...rest,
+    ...(tickets ? { tickets } : {}),
+    ...(loyalty ? { loyalty } : {}),
+  };
 }
 
 /**
@@ -362,8 +396,8 @@ export function hostReadback() {
       host.status === "absent" ? null : host.configurationSha256,
     configVersion: configuration?.release.configVersion ?? null,
     engine: { version: packageJson.version, commit: engineCommit() },
-    // `tickets` is reported only for a host that enabled it, so the readback
-    // of every host that predates it is unchanged.
+    // `tickets` and `loyalty` are reported only for a host that enabled
+    // them, so the readback of every host that predates them is unchanged.
     journeys: configuration ? readbackJourneys(configuration.journeys) : null,
     faces: configuration ? [...configuration.faces] : null,
     status: host.status,

@@ -14,6 +14,7 @@ import {
 import { loadProductFaceContext } from "@/app/_services/product-face.client";
 import { loadSession } from "@/app/_services/session.client";
 import { getTicket, listTicketsPage } from "@/app/_services/tickets.client";
+import { readMembership, readProgramme } from "@/app/_services/loyalty.client";
 
 // ponytail: one fixed interval, no server-driven expiry hint. Shorten this if
 // the API refresh-token lifetime ever drops below ~10 minutes.
@@ -135,6 +136,45 @@ export function productFaceContextQueryOptions(
     // read once per launch (frame) and never refetched underneath a live face.
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 0,
+    retry: false,
+  });
+}
+
+// Loyalty reads are proven afresh by the BFF on every read; a failed read is
+// retried by the member, not silently.
+const LOYALTY_STALE_MS = 15_000;
+
+export function loyaltyProgrammeQueryOptions(input: {
+  slug: string;
+  launchId: string;
+  walletId?: string;
+}) {
+  const { slug, launchId, walletId } = input;
+  // The launch id only scopes this tab's BFF reads; it stays out of the key.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  return queryOptions({
+    queryKey: queryKeys.loyalty.programme({ slug, walletId: walletId ?? "" }),
+    queryFn: walletId
+      ? ({ signal }) => readProgramme({ slug, launchId }, signal)
+      : skipToken,
+    staleTime: LOYALTY_STALE_MS,
+    retry: false,
+  });
+}
+
+export function loyaltyMembershipQueryOptions(input: {
+  slug: string;
+  launchId: string;
+  walletId?: string;
+}) {
+  const { slug, launchId, walletId } = input;
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  return queryOptions({
+    queryKey: queryKeys.loyalty.membership({ slug, walletId: walletId ?? "" }),
+    queryFn: walletId
+      ? ({ signal }) => readMembership({ slug, launchId }, signal)
+      : skipToken,
+    staleTime: LOYALTY_STALE_MS,
     retry: false,
   });
 }

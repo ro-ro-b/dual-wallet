@@ -17,6 +17,7 @@ import {
   HOST_CONFIGURATION_SCHEMA,
   hostColourKeys,
   hostJourneys,
+  optionalHostJourneys,
   isHexColour,
   isHostFontFamily,
   isHostJourney,
@@ -264,6 +265,9 @@ export function bindingBacksJourney(
       // Tickets read the holder's own objects through the binding's declared
       // ticket rules; without them the face has no canonical projection.
       return binding.tickets !== null;
+    case "loyalty":
+      // loyalty-join-earn-v1: the programme's canonical membership and pass.
+      return binding.loyalty !== null;
     case "transfer":
       // transfer.sign needs the request template; the recipient accepts
       // through the wallet's handover entry.
@@ -338,22 +342,27 @@ function validate(
   }
 
   const journeys = value.journeys;
-  // The five original journeys are always stated; `tickets` is opt-in and an
-  // absent key is false (so older configurations stay valid unchanged).
+  // The five original journeys are always stated; `tickets` and `loyalty`
+  // are opt-in and an absent key is false (so older configurations stay
+  // valid unchanged).
   if (
     !record(journeys) ||
     !Object.keys(journeys).every((key) => isHostJourney(key)) ||
     !requiredHostJourneys.every(
       (journey) => typeof journeys[journey] === "boolean",
     ) ||
-    (Object.hasOwn(journeys, "tickets") &&
-      typeof journeys.tickets !== "boolean")
+    optionalHostJourneys.some(
+      (journey) =>
+        Object.hasOwn(journeys, journey) &&
+        typeof journeys[journey] !== "boolean",
+    )
   ) {
     return invalid("journeys");
   }
   const enabled = {
     ...(journeys as Partial<HostJourneys>),
     tickets: journeys.tickets === true,
+    loyalty: journeys.loyalty === true,
   } as HostJourneys;
   // A quote decision is a decision on a service case.
   if (enabled.quoteDecisions && !enabled.serviceProgress) {

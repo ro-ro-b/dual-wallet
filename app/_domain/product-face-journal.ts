@@ -21,6 +21,9 @@ export const journalKinds = [
   "transfer",
   // P4.3 ticket-admission-v1: the holder's one signed admission update.
   "admission",
+  // loyalty-join-earn-v1: a member's activity submission, written by the
+  // programme's runtime (issuer-signed); the member signs nothing on Dual.
+  "loyalty",
 ] as const;
 export type JournalKind = (typeof journalKinds)[number];
 
@@ -64,6 +67,14 @@ export interface FaceJournalEntry {
    * canonical JSON; the proxy forwards nothing else (api/face-execution-binding).
    */
   inputHash?: string;
+  /**
+   * loyalty-join-earn-v1: the submitted evidence as its hash
+   * (`sha256:` of the exact text, Studio's activityEvidenceHash); never the
+   * text itself.
+   */
+  evidenceHash?: string;
+  /** loyalty-join-earn-v1: the programme's activity type code. */
+  activityType?: string;
   /**
    * The host-read quote a quote approval or decline is bound to, as a hash of
    * its {quote_version, amount, currency}; never the quote itself.
@@ -139,6 +150,8 @@ const ACTION_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const OPERATION = /^[a-z_][a-z0-9_.]{1,63}$/;
 const OFFER_ID = /^pto-[0-9a-f]{24}$/;
 const ADMISSION_REQUEST_ID = /^tad-[0-9a-f]{32}$/;
+const ACTIVITY_TYPE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export const LOYALTY_SUBMIT_OPERATION = "loyalty.activity.submit";
 const TRANSFER_OPERATIONS = ["transfer.request", "transfer.transfer"];
 
 /** A holder-signed step: reserved, then executed only after its own won. */
@@ -180,6 +193,10 @@ export function parseJournalEntry(
       (typeof entry.admissionRequestId !== "string" ||
         !ADMISSION_REQUEST_ID.test(entry.admissionRequestId))) ||
     (entry.inputHash !== undefined && !isRequestHash(entry.inputHash)) ||
+    (entry.evidenceHash !== undefined && !isRequestHash(entry.evidenceHash)) ||
+    (entry.activityType !== undefined &&
+      (typeof entry.activityType !== "string" ||
+        !ACTIVITY_TYPE.test(entry.activityType))) ||
     (entry.quoteHash !== undefined && !isRequestHash(entry.quoteHash)) ||
     (entry.freshHash !== undefined && !isRequestHash(entry.freshHash)) ||
     (entry.dispatch !== undefined &&
@@ -222,6 +239,16 @@ export function parseJournalEntry(
   ) {
     return undefined;
   }
+  if (
+    (entry.kind === "loyalty") !==
+      (entry.evidenceHash !== undefined || entry.activityType !== undefined) ||
+    (entry.kind === "loyalty" &&
+      (entry.operation !== LOYALTY_SUBMIT_OPERATION ||
+        !entry.evidenceHash ||
+        !entry.activityType))
+  ) {
+    return undefined;
+  }
   return {
     operationId: entry.operationId,
     kind: entry.kind as JournalKind,
@@ -239,6 +266,12 @@ export function parseJournalEntry(
       ? { admissionRequestId: entry.admissionRequestId as string }
       : {}),
     ...(entry.inputHash ? { inputHash: entry.inputHash as string } : {}),
+    ...(entry.evidenceHash
+      ? { evidenceHash: entry.evidenceHash as string }
+      : {}),
+    ...(entry.activityType
+      ? { activityType: entry.activityType as string }
+      : {}),
     ...(entry.quoteHash ? { quoteHash: entry.quoteHash as string } : {}),
     ...(entry.freshHash ? { freshHash: entry.freshHash as string } : {}),
     ...(entry.dispatch === "won" ? { dispatch: "won" as const } : {}),
@@ -362,6 +395,20 @@ export function sentAdmissionStep(entry: FaceJournalEntry) {
     entry.kind === "admission" &&
     entry.phase === "submitted" &&
     Boolean(entry.admissionRequestId)
+  );
+}
+
+/**
+ * loyalty-join-earn-v1: an activity submission whose one assertion this
+ * wallet issued (open, or settled since). Wherever it is found, it is only
+ * read back under its original operation id: never resubmitted.
+ */
+export function sentLoyaltyStep(entry: FaceJournalEntry) {
+  return (
+    entry.kind === "loyalty" &&
+    entry.operation === LOYALTY_SUBMIT_OPERATION &&
+    entry.issuedAt !== undefined &&
+    (entry.phase === "assertion_issued" || entry.phase === "settled")
   );
 }
 
@@ -608,7 +655,8 @@ export function applyJournalTransition(
       }
       if (
         transition.requestHash !== undefined &&
-        (existing.kind !== "runtime" || !isRequestHash(transition.requestHash))
+        ((existing.kind !== "runtime" && existing.kind !== "loyalty") ||
+          !isRequestHash(transition.requestHash))
       ) {
         return { ok: false, error: "operation_conflict" };
       }
@@ -721,8 +769,12 @@ export function journalOperationStatus(
   // Closed: provably never accepted, whatever the unit shows since.
   if (entry.closure) return "not_submitted";
   if (entry.kind === "runtime") return "authorized";
-  // G8 and P4.3: known only from the runtime's own verify/status.
-  if (entry.kind === "transfer" || entry.kind === "admission") {
+  // G8, P4.3 and Loyalty: known only from the runtime's own verify/status.
+  if (
+    entry.kind === "transfer" ||
+    entry.kind === "admission" ||
+    entry.kind === "loyalty"
+  ) {
     return entry.phase === "settled" ? "registered" : "outcome_unknown";
   }
   if (evaluation === undefined) return "outcome_unknown";

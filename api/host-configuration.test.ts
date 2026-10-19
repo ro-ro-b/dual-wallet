@@ -129,7 +129,11 @@ describe("an active configuration", () => {
     const sealed = sealHost(morrowDocument()).document;
     expect(state.configuration).toEqual({
       ...sealed,
-      journeys: { ...(sealed.journeys as object), tickets: false },
+      journeys: {
+        ...(sealed.journeys as object),
+        tickets: false,
+        loyalty: false,
+      },
     });
     expect(Buffer.from(state.logo).toString("base64")).toBe(
       (morrowDocument().identity as { logo: { dataBase64: string } }).logo

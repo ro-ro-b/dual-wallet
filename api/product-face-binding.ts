@@ -11,6 +11,7 @@ import {
   type SettleRules,
   type TransferRequestRules,
 } from "../app/_domain/product-face";
+import { parseLoyaltyRules, type LoyaltyRules } from "../app/_domain/loyalty";
 import { parseAdmissionRules } from "../app/_domain/ticket-admission";
 import type { TicketRules } from "../app/_domain/tickets";
 
@@ -49,6 +50,12 @@ export interface ProductFaceBinding {
    * this face and the wallet serves none (fail closed).
    */
   tickets: TicketRules | null;
+  /**
+   * loyalty-join-earn-v1 (docs/proposals/loyalty-join-earn-v1.md): the
+   * programme's existing issuer-owned canonical membership and opening pass.
+   * Absent: the face has no Loyalty journey and the wallet serves none.
+   */
+  loyalty: LoyaltyRules | null;
   /**
    * contract r14: whether face-enabled handover links may enter this
    * programme's face through /products/<slug>/handover. Off unless the
@@ -93,6 +100,7 @@ const BINDING_KEYS = [
   "transferRequest",
   "linkedRuntimes",
   "tickets",
+  "loyalty",
   "handover",
 ] as const;
 const TICKET_KEYS = ["fields", "states", "admission"] as const;
@@ -534,6 +542,8 @@ function binding(
   }
   const tickets = ticketRules(value.tickets);
   if (tickets === undefined) return undefined;
+  const loyalty = parseLoyaltyRules(value.loyalty);
+  if (loyalty === undefined) return undefined;
   const handover = handoverRule(value.handover);
   if (!handover) return undefined;
   return {
@@ -553,6 +563,7 @@ function binding(
     transferRequest,
     linkedRuntimes: linked,
     tickets,
+    loyalty,
     handover,
   };
 }

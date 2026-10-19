@@ -33,6 +33,7 @@ const host = (transfer: boolean): HostPresentation => ({
     quoteDecisions: false,
     transfer,
     tickets: false,
+    loyalty: false,
   },
 });
 

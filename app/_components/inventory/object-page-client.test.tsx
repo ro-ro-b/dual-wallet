@@ -47,6 +47,7 @@ const host: HostPresentation = {
     quoteDecisions: true,
     transfer: true,
     tickets: false,
+    loyalty: false,
   },
 };
 

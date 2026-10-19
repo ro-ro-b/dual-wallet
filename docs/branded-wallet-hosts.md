@@ -111,24 +111,24 @@ number, so the canonical form is unambiguous. The whole document is at most
 }
 ```
 
-| Field                                    | Rule                                                                                                                                                                                                                                            |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema`                                 | Exactly `dual-wallet-host-configuration-v1`.                                                                                                                                                                                                    |
-| `brand.id`                               | `^[a-z0-9][a-z0-9-]{1,62}$`.                                                                                                                                                                                                                    |
-| `brand.name`, `shortName`, `description` | Display text of at most 40, 16 and 160 characters: non-empty, trimmed, no control characters, no `<` or `>`.                                                                                                                                    |
-| `entrance.origin`                        | An exact origin (no path, credentials or wildcard), `https`; `http` only for loopback outside production. Must equal the origin of `NEXT_PUBLIC_APP_URL`.                                                                                       |
-| `entrance.organizationId`                | A Dual organisation ObjectID, `^[0-9a-f]{24}$`.                                                                                                                                                                                                 |
-| `identity.logo`                          | `image/png` or `image/webp` only (never SVG); magic bytes must match (PNG signature and IHDR; RIFF/WEBP of exactly its size); canonical base64; at most 32 KiB decoded; `sha256` of exactly the decoded bytes.                                  |
-| `identity.colours`                       | The eleven keys above, each lowercase `#rrggbb`, passing every [contrast rule](#contrast).                                                                                                                                                      |
-| `identity.typography.family`             | One of the bundled families: `satoshi` (the engine's own files in `public/fonts`), `system-sans`, `system-serif`, `system-rounded` (system stacks). No remote font.                                                                             |
-| `home.headline`, `home.introduction`     | Display text of at most 80 and 280 characters.                                                                                                                                                                                                  |
-| `home.primaryJourney`                    | An enabled journey.                                                                                                                                                                                                                             |
-| `navigation`                             | An ordered, unique subset of `inventory`, `products`, `activity`, `settings` (labels are the engine's). `products` needs `journeys.myProducts`.                                                                                                 |
-| `journeys`                               | The five booleans, plus the optional `tickets` boolean (absent is false; see [Tickets](#tickets-opt-in-read-only-p42)). `quoteDecisions` needs `serviceProgress`. Every enabled journey must be [backed](#journeys) by one of the host's faces. |
-| `faces`                                  | 1-32 unique face slugs, each a valid binding in `PRODUCT_FACE_APPLICATIONS`. Any other binding in that registry is not this host's.                                                                                                             |
-| `release.configVersion`                  | Semver.                                                                                                                                                                                                                                         |
-| `release.approvedContentHash`            | `sha256:` + hex sha256 of the canonical JSON of the document **without** `release`: the hash Studio's owner approved.                                                                                                                           |
-| `release.studioVersionRef`               | `^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,127}$`.                                                                                                                                                                                                       |
+| Field                                    | Rule                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schema`                                 | Exactly `dual-wallet-host-configuration-v1`.                                                                                                                                                                                                                                                                       |
+| `brand.id`                               | `^[a-z0-9][a-z0-9-]{1,62}$`.                                                                                                                                                                                                                                                                                       |
+| `brand.name`, `shortName`, `description` | Display text of at most 40, 16 and 160 characters: non-empty, trimmed, no control characters, no `<` or `>`.                                                                                                                                                                                                       |
+| `entrance.origin`                        | An exact origin (no path, credentials or wildcard), `https`; `http` only for loopback outside production. Must equal the origin of `NEXT_PUBLIC_APP_URL`.                                                                                                                                                          |
+| `entrance.organizationId`                | A Dual organisation ObjectID, `^[0-9a-f]{24}$`.                                                                                                                                                                                                                                                                    |
+| `identity.logo`                          | `image/png` or `image/webp` only (never SVG); magic bytes must match (PNG signature and IHDR; RIFF/WEBP of exactly its size); canonical base64; at most 32 KiB decoded; `sha256` of exactly the decoded bytes.                                                                                                     |
+| `identity.colours`                       | The eleven keys above, each lowercase `#rrggbb`, passing every [contrast rule](#contrast).                                                                                                                                                                                                                         |
+| `identity.typography.family`             | One of the bundled families: `satoshi` (the engine's own files in `public/fonts`), `system-sans`, `system-serif`, `system-rounded` (system stacks). No remote font.                                                                                                                                                |
+| `home.headline`, `home.introduction`     | Display text of at most 80 and 280 characters.                                                                                                                                                                                                                                                                     |
+| `home.primaryJourney`                    | An enabled journey.                                                                                                                                                                                                                                                                                                |
+| `navigation`                             | An ordered, unique subset of `inventory`, `products`, `activity`, `settings` (labels are the engine's). `products` needs `journeys.myProducts`.                                                                                                                                                                    |
+| `journeys`                               | The five booleans, plus the optional `tickets` and `loyalty` booleans (absent is false; see [Tickets](#tickets-opt-in-read-only-p42) and [Loyalty](#loyalty-opt-in-loyalty-join-earn-v1)). `quoteDecisions` needs `serviceProgress`. Every enabled journey must be [backed](#journeys) by one of the host's faces. |
+| `faces`                                  | 1-32 unique face slugs, each a valid binding in `PRODUCT_FACE_APPLICATIONS`. Any other binding in that registry is not this host's.                                                                                                                                                                                |
+| `release.configVersion`                  | Semver.                                                                                                                                                                                                                                                                                                            |
+| `release.approvedContentHash`            | `sha256:` + hex sha256 of the canonical JSON of the document **without** `release`: the hash Studio's owner approved.                                                                                                                                                                                              |
+| `release.studioVersionRef`               | `^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,127}$`.                                                                                                                                                                                                                                                                          |
 
 The parser is `api/host-configuration.ts` (`evaluateHostConfiguration`), the
 contract constants are in `app/_domain/wallet-host.ts`, and the exhaustive
@@ -219,6 +219,7 @@ uses those tokens:
 | `quoteDecisions`  | (inside `/service`)                                                            | `case.quote.approve`, `case.quote.decline`                                                                            | a linked `claims-warranty` runtime                  |
 | `tickets`         | wallet-native `/products/<slug>/tickets` and `/tickets/<object id>` (no frame) | `GET /api/faces/<slug>/tickets` and `/tickets/<object id>`, read-only                                                 | a binding with `tickets` rules                      |
 | `transfer`        | `/accept…`; `/products/<id>/transfer…`; the handover entry                     | `transfer.*`; journal kind `transfer`; `transfer-proposal`, `transfer-progress`, `accept-offer`; an acceptance ticket | a `transferRequest` template and `handover.enabled` |
+| `loyalty`         | wallet-native `/products/<slug>/loyalty` (no frame)                            | `POST /api/faces/<slug>/loyalty` (`loyalty.*` host operations); journal kind `loyalty`                                | a binding with the `loyalty` block                  |
 
 The face home, `/support` and `/ended` need no journey; the context read,
 selection and the journal list are shared by all of them. The list's
@@ -252,6 +253,20 @@ is the transfer journey's and is refused on a host without it.
   unavailable, never as an empty list.
 - The pages are protected: a signed-out visit signs in and returns to the exact
   list or ticket.
+
+### Loyalty (opt-in; loyalty-join-earn-v1)
+
+- `journeys.loyalty` is optional in the same way as `tickets`: an omitted key
+  is `false`, older configurations keep their canonical bytes, hash and
+  readback, and the readback reports `loyalty` only for a host that enabled
+  it. The generic wallet never serves Loyalty. Enabling it requires a face
+  whose binding carries the exact `loyalty` block.
+- The page and the home's membership card show only what the BFF proved in
+  that request, from the runtime's authenticated exact canonical read and
+  action receipts, re-checked against the provider's public object, action
+  log and history and the holder's own pass. No points, tiers or rejections
+  are shown. The full contract, its proof rules and its live release
+  blockers are in [loyalty-join-earn-v1](./proposals/loyalty-join-earn-v1.md).
 
 ### Enforcement is on the server
 

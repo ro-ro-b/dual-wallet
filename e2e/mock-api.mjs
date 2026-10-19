@@ -11,6 +11,8 @@ import {
   TICKET_IDS,
   TICKET_TEMPLATE,
 } from "./tickets-home/environment.mjs";
+import { CANON_TEMPLATE } from "./loyalty/environment.mjs";
+import { loyaltyWorld } from "./loyalty/world.mjs";
 
 const expectedOrganizationId =
   process.env.DEFAULT_ORGANIZATION_ID || "000000000000000000000001";
@@ -295,6 +297,15 @@ function seedTickets(store) {
 // P4.3 admission fixture (MOCK_TICKETS_ADMISSION=1): one FICTIONAL ticket on
 // the shared Tickets service's closed 16-key template, held by the holder.
 const admissionFixture = process.env.MOCK_TICKETS_ADMISSION === "1";
+// Loyalty fixture (MOCK_LOYALTY=1): a FICTIONAL provider world for the
+// issuer-owned canonical membership and the member's pass (e2e/loyalty).
+const loyalty =
+  process.env.MOCK_LOYALTY === "1"
+    ? loyaltyWorld({
+        organization: process.env.DEFAULT_ORGANIZATION_ID || "",
+        canonicalTemplate: CANON_TEMPLATE,
+      })
+    : null;
 function seedAdmissionTicket(store) {
   const now = Date.now();
   store.set(ADMISSION_TICKET, {
@@ -554,6 +565,7 @@ async function handleProgramme(request, response, url) {
     objects = seedProgramme();
     if (ticketsFixture) seedTickets(objects);
     if (admissionFixture) seedAdmissionTicket(objects);
+    loyalty?.reset();
     actionLogs = [];
     loseExecuteResponses = 0;
     return respond(response, 200, { ok: true });
@@ -722,7 +734,10 @@ async function handleProgramme(request, response, url) {
         actions: [{ template_id: object.template_id, actions: ["update"] }],
       });
     }
-    const list = [...objects.values()].filter(
+    const pool = loyalty
+      ? [...objects.values(), ...loyalty.objects()]
+      : [...objects.values()];
+    const list = pool.filter(
       (object) =>
         (!templateId || object.template_id === templateId) &&
         (!owner || object.owner.toLowerCase() === owner) &&
@@ -833,6 +848,13 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method === "GET" && request.url === "/health") {
     return respond(response, 200, { ok: true });
+  }
+
+  if (
+    loyalty &&
+    (await loyalty.handle(request, response, url, respond, readBody))
+  ) {
+    return;
   }
 
   if (

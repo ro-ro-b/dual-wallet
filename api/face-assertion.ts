@@ -10,6 +10,7 @@ import {
 import type { NextRequest } from "next/server";
 import type { ProductFaceBinding } from "@/api/product-face-binding";
 import type { RuntimeOperation } from "@/app/_domain/product-face";
+import type { LoyaltyHostOperation } from "@/app/_domain/loyalty";
 import type { TicketHostOperation } from "@/app/_domain/ticket-admission";
 
 export const ASSERTION_TYPE = "dual-face-assertion+jwt";
@@ -70,6 +71,8 @@ export function sha256Hash(value: string) {
 }
 
 export interface AssertionTarget {
+  /** loyalty-join-earn-v1: the programme's catalog model id. */
+  model_id?: string;
   object_id?: string;
   case_id?: string;
   quote_version?: number;
@@ -82,8 +85,11 @@ export interface FaceAssertionInput {
   binding: ProductFaceBinding;
   walletId: string;
   holder: string;
-  /** A face runtime operation, or (P4.3) one of the host's own ticket operations. */
-  operation: RuntimeOperation | TicketHostOperation;
+  /**
+   * A face runtime operation, or one of the host's own ticket (P4.3) or
+   * Loyalty (loyalty-join-earn-v1) operations.
+   */
+  operation: RuntimeOperation | TicketHostOperation | LoyaltyHostOperation;
   operationId: string;
   target: AssertionTarget;
   requestHash: string;

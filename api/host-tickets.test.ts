@@ -109,7 +109,7 @@ describe("the tickets journey in a host configuration", () => {
 
   it("still refuses an unknown journey key and a missing original one", () => {
     const unknown = morrowDocument();
-    edit(unknown, "journeys.loyalty", true);
+    edit(unknown, "journeys.points", true);
     expect(evaluateHostConfiguration(inputFor(unknown)).status).toBe("invalid");
     const missing = morrowDocument();
     edit(missing, "journeys.transfer", REMOVE);

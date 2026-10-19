@@ -118,7 +118,12 @@ export function faceRegistry() {
   ];
 }
 
-export function hostConfiguration(origin) {
+/**
+ * The fictional host document, sealed and pinned. `journeys` and `home` may be
+ * overridden by another fixture (the Loyalty suite); the defaults are the
+ * Tickets fixture's own, so its bytes and pin are unchanged.
+ */
+export function hostConfiguration(origin, { journeys, home, faces } = {}) {
   const document = {
     schema: "dual-wallet-host-configuration-v1",
     brand: {
@@ -149,14 +154,14 @@ export function hostConfiguration(origin) {
       },
       typography: { family: "system-sans" },
     },
-    home: {
+    home: home ?? {
       headline: "Your Harbour Nights tickets (fictional).",
       introduction:
         "A local fixture: every event, ticket and account here is made up.",
       primaryJourney: "tickets",
     },
     navigation: ["inventory", "settings"],
-    journeys: {
+    journeys: journeys ?? {
       registration: false,
       myProducts: false,
       serviceProgress: false,
@@ -164,7 +169,7 @@ export function hostConfiguration(origin) {
       transfer: false,
       tickets: true,
     },
-    faces: [SLUG],
+    faces: faces ?? [SLUG],
     release: {
       configVersion: "0.0.1",
       approvedContentHash: "",

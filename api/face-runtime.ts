@@ -5,6 +5,10 @@ import { sha256Hash, type AssertionTarget } from "@/api/face-assertion";
 import type { ProductFaceBinding } from "@/api/product-face-binding";
 import { runtimeWorkloadAuth, TRUSTED_OIDC_HEADER } from "@/api/runtime-oidc";
 import {
+  isLoyaltyHostOperation,
+  type LoyaltyHostOperation,
+} from "@/app/_domain/loyalty";
+import {
   isTicketHostOperation,
   type TicketHostOperation,
 } from "@/app/_domain/ticket-admission";
@@ -1615,4 +1619,53 @@ export function admissionReserveOutcome(
         reached: true,
         status: typeof body.status === "string" ? body.status : null,
       };
+}
+
+/**
+ * loyalty-join-earn-v1 (docs/proposals/loyalty-join-earn-v1.md §2): one call
+ * to the bound Loyalty runtime on the fixed endpoint, for exactly the host's
+ * own five operations, with one operation-bound assertion. The caller parses
+ * the exact status and body; no reply at all is `reached: false`, which a
+ * write treats as possibly dispatched (outcome unknown).
+ */
+export async function loyaltyRuntimeCall(
+  binding: Pick<ProductFaceBinding, "origin" | "applicationId">,
+  request: {
+    operation: LoyaltyHostOperation;
+    operationId: string;
+    target: AssertionTarget;
+    input: Record<string, unknown>;
+  },
+  assertion: string,
+): Promise<
+  { reached: true; status: number; body: unknown } | { reached: false }
+> {
+  if (!isLoyaltyHostOperation(request.operation)) return { reached: false };
+  let response: Awaited<ReturnType<typeof fetchBounded>>;
+  try {
+    response = await runtimeFetch(
+      `${binding.origin}${RUNTIME_ENDPOINT}`,
+      MAX_RESPONSE_BYTES,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "x-tig-product-face-application": binding.applicationId,
+        },
+        body: JSON.stringify({ ...request, assertion }),
+      },
+      TIMEOUT_MS,
+    );
+  } catch {
+    return { reached: false };
+  }
+  if (!response) return { reached: false };
+  let body: unknown;
+  try {
+    body = JSON.parse(response.body.toString("utf8"));
+  } catch {
+    body = undefined;
+  }
+  return { reached: true, status: response.status, body };
 }

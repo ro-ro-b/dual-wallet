@@ -38,6 +38,10 @@ import {
   type FaceRequestContext,
 } from "@/api/product-face-server";
 import {
+  isLoyaltyHostOperation,
+  type LoyaltyHostOperation,
+} from "@/app/_domain/loyalty";
+import {
   isTicketHostOperation,
   type TicketHostOperation,
 } from "@/app/_domain/ticket-admission";
@@ -201,8 +205,8 @@ export async function selectProduct(
 // ------------------------------------------------------------------ minting
 
 interface MintRequest {
-  /** P4.3: the host's own ticket operations are minted here too. */
-  operation: RuntimeOperation | TicketHostOperation;
+  /** The host's own ticket (P4.3) and Loyalty operations are minted here too. */
+  operation: RuntimeOperation | TicketHostOperation | LoyaltyHostOperation;
   operationId: string;
   target: AssertionTarget;
   requestHash: string;
@@ -235,9 +239,11 @@ export function mint(
   // contract r10: a case operation's audience is the linked Warranty runtime;
   // without one, nothing is minted for it.
   const routed = input.audienceOf ?? input.operation;
-  // A ticket operation is always the bound Tickets runtime's own.
+  // A ticket or Loyalty operation is always the bound runtime's own.
   const caseOperation =
-    !isTicketHostOperation(routed) && isLinkedCaseOperation(routed);
+    !isTicketHostOperation(routed) &&
+    !isLoyaltyHostOperation(routed) &&
+    isLinkedCaseOperation(routed);
   const linked = caseOperation ? linkedCaseRuntime(context) : undefined;
   if (caseOperation && !linked) {
     return fail("case_runtime_not_linked", 409);

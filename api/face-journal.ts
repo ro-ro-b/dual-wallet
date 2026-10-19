@@ -8,6 +8,7 @@ import {
   pruneJournal,
   recoverableRegistration,
   sentAdmissionStep,
+  sentLoyaltyStep,
   sentTransferStep,
   type FaceJournalEntry,
 } from "@/app/_domain/product-face-journal";
@@ -319,6 +320,19 @@ export function readFaceAdmissionHistory(
   );
 }
 
+/**
+ * loyalty-join-earn-v1: activity submissions in this browser's OTHER launch
+ * journals of this same wallet, face and programme (a reload or a sign-in
+ * since). Read only to follow their original operation; never rewritten.
+ */
+export function readFaceLoyaltyHistory(
+  request: NextRequest,
+  scope: FaceJournalScope,
+  now = Date.now(),
+): FaceJournalEntry[] {
+  return historyEntries(request, scope, now).filter(sentLoyaltyStep);
+}
+
 export function readFaceTransferHistory(
   request: NextRequest,
   scope: FaceJournalScope,
@@ -396,7 +410,9 @@ function signedEvidence(entry: FaceJournalEntry) {
     (recoverableRegistration(entry) && entry.phase !== "settled") ||
     sentTransferStep(entry) ||
     // P4.3: an admission step that left the wallet, outcome not yet read.
-    sentAdmissionStep(entry)
+    sentAdmissionStep(entry) ||
+    // Loyalty: a submission whose assertion left, outcome not yet proven.
+    (sentLoyaltyStep(entry) && entry.phase === "assertion_issued")
   );
 }
 

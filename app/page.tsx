@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/api/settings";
 import { hostHome, hostPresentation } from "@/api/wallet-host";
 import { HostHome } from "@/app/_components/host/host-home";
+import { LoyaltyTodaySection } from "@/app/_components/host/loyalty-today";
 import { TicketsTodaySection } from "@/app/_components/host/tickets-today";
 import { Providers } from "@/app/_providers/providers";
 
@@ -17,12 +18,20 @@ export default async function Home() {
   const home = hostHome();
   if (home) {
     const today =
-      signedIn && home.tickets ? (
+      signedIn && (home.tickets || home.loyalty) ? (
         <Providers host={hostPresentation()}>
-          <TicketsTodaySection
-            slug={home.tickets.slug}
-            href={home.tickets.href}
-          />
+          {home.tickets ? (
+            <TicketsTodaySection
+              slug={home.tickets.slug}
+              href={home.tickets.href}
+            />
+          ) : null}
+          {home.loyalty ? (
+            <LoyaltyTodaySection
+              slug={home.loyalty.slug}
+              href={home.loyalty.href}
+            />
+          ) : null}
         </Providers>
       ) : null;
     return <HostHome home={home} signedIn={signedIn} today={today} />;

@@ -98,6 +98,7 @@ describe("two brand hosts from one build", () => {
         quoteDecisions: true,
         transfer: true,
         tickets: false,
+        loyalty: false,
       },
     });
     expect(tidewell).toEqual({
@@ -115,6 +116,7 @@ describe("two brand hosts from one build", () => {
         quoteDecisions: false,
         transfer: false,
         tickets: false,
+        loyalty: false,
       },
     });
   });
@@ -354,6 +356,7 @@ describe("journeys, pages and faces", () => {
       ],
       // No Tickets journey: no Today section on this home.
       tickets: null,
+      loyalty: null,
     });
     resetWalletHostCache();
     applyHostEnvironment(hostEnvironment(tidewellDocument()));

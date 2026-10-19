@@ -1,8 +1,8 @@
 # Loyalty join and earn from the branded wallet: `loyalty-join-earn-v1`
 
-**Status.** Final wire contract for root review. The wallet half is being
-implemented on this branch (§9); the matching runtime leg is Studio's to
-build. Nothing here is live. Every operation, binding key,
+**Status.** Final wire contract. The wallet half is implemented in source
+(§9) and proven only against FICTIONAL local fakes; the matching runtime
+leg is Studio's to build. Nothing here is live, and the §8 blockers stand. Every operation, binding key,
 journal kind and route below is new to this contract. Everything else is
 existing Studio source at `ff977a4` (cited), and provider behaviour is the
 generated SDK's contract plus root's read-only observations, **live-unverified
@@ -57,6 +57,21 @@ x-tig-product-face-application: <binding.applicationId>
   other than `target`.
 
 ## 3. Shared wire types
+
+**Three distinct identities, never compared with each other.**
+
+- `custom.recordId`: Studio's application record reference (for example
+  `mbr-…`), assigned before the mint and written into every map
+  (`api/purpose-runtime.mjs:2475`).
+- `object_id`: the provider's minted object id, which does not exist before
+  the mint; Studio keeps it apart from the record (`proof.objectId`,
+  `src/studio-loyalty-programme.mjs:208, 241, 566`).
+- `action_id`: one Dual action-log id.
+
+Correlation is always like with like: a receipt's `written_custom.recordId`
+against the fresh canonical `custom.recordId` (and its public projection),
+and a receipt's `object_id` against the canonical `object_id`. A `recordId`
+is never an object id, and no Dual field is added for either.
 
 Canonical JSON: keys sorted at every level, no whitespace, strings escaped as
 `JSON.stringify`, absent members omitted. `Hash` = `sha256:<64 lowercase
@@ -199,7 +214,8 @@ wallet id in participant custody: `api/purpose-runtime.mjs:1114-1121`,
 - `owner` = `canonicalIssuerAccount`;
 - `custom.programmeId` = `binding.loyalty.programmeId` and
   `custom.memberReference` = `expectedMember`;
-- `custom.state` is a lifecycle state;
+- `custom.recordId` is a non-empty application record reference (not an
+  object id) and `custom.state` is a lifecycle state;
 - the wallet's own public read (`GET /public/objects/{id}`) shows the same
   owner, template, `nonce`, `state_hash` and `content_hash`, and every public
   custom key equals C's. A public subset alone proves nothing more.
@@ -213,8 +229,9 @@ wallet id in participant custody: `api/purpose-runtime.mjs:1114-1121`,
    assumed.
 2. `written_custom` is the existing Studio write format:
    - `generic_semantic_purpose` = `membership-loyalty-rewards`;
-   - `recordId` = C's, `programmeId` as bound, `memberReference` =
-     `expectedMember`;
+   - `recordId` = C's `custom.recordId` (the immutable application record
+     reference, compared only with itself; `object_id` is checked in (1)),
+     `programmeId` as bound, `memberReference` = `expectedMember`;
    - `state`: `Member` for create, `Activity pending` for submit,
      `Activity verified` for verify;
    - for submit and verify, `lifecycle.action_id` starts with
@@ -329,14 +346,34 @@ never shown as progress.
    pass snapshot's `canonicalOpeningActionId`).
 7. Physical fulfilment, benefits and redemption: out of scope.
 
-## 9. Wallet implementation (planned paths, in progress)
+## 9. Wallet implementation (source only)
 
-Planned, not yet present: `app/_domain/loyalty.ts` (operation allowlist,
-parsers, the §5 proofs); the binding block in `api/product-face-binding.ts`;
-the host journey in `app/_domain/wallet-host.ts`, `api/host-configuration.ts`
-and `api/wallet-host.ts`; the BFF `api/product-face-loyalty.ts` with
-`app/api/faces/[slug]/loyalty/route.ts` and provider reads in
-`api/loyalty-provider.ts`; the journal kind `loyalty` in
-`app/_domain/product-face-journal.ts`; the page
-`app/(authorized)/products/[slug]/loyalty/page.tsx`; a FICTIONAL browser
-suite with a local fake runtime that verifies every assertion.
+- Domain: `app/_domain/loyalty.ts` (operation allowlist, binding block,
+  parsers with exact accounting, the §5 proofs).
+- Binding and host: `api/product-face-binding.ts` (`loyalty`),
+  `app/_domain/wallet-host.ts`, `api/host-configuration.ts`,
+  `api/wallet-host.ts` (`journeys.loyalty`, `loyaltyServedBy`, the home card).
+- BFF: `api/product-face-loyalty.ts` and
+  `app/api/faces/[slug]/loyalty/route.ts`; provider reads in
+  `api/loyalty-provider.ts`; the runtime call `loyaltyRuntimeCall`
+  (`api/face-runtime.ts`); journal kind `loyalty`
+  (`app/_domain/product-face-journal.ts`, `api/face-journal.ts`).
+- Pages: `app/(authorized)/products/[slug]/loyalty/page.tsx`,
+  `app/_components/products/loyalty-view.tsx`,
+  `app/_components/host/loyalty-today.tsx`.
+- Tests:
+  - `app/_domain/loyalty.test.ts`;
+  - `api/product-face-loyalty.test.ts`: real handlers. It covers wrong
+    client, member, pass, pass signer, signer, history, evidence and
+    record, a distinct record reference and object id, duplicates, matching
+    and non-adjacent verification, pending creation and pass, lost replies
+    across reloads and sign-ins, `not_received` only after expiry, and legacy
+    bindings and hosts;
+  - `api/host-loyalty.test.ts`;
+  - `app/_components/products/loyalty-view.test.tsx`.
+- Browser (FICTIONAL): `npx playwright test -c playwright.loyalty.config.ts`
+  (ports 3340, 4340 and 4350; `e2e/loyalty.spec.ts`). It runs the real
+  wallet against the fake api-v3 with a fictional provider world
+  (`e2e/loyalty/world.mjs`, `MOCK_LOYALTY=1`) and a LOCAL FAKE runtime that
+  verifies every assertion (`e2e/loyalty/fake-loyalty-runtime.mjs`). The fake
+  is not Studio's runtime and proves nothing about it.

@@ -750,7 +750,8 @@
       "serviceProgress": "Follow a service",
       "quoteDecisions": "Review a quote",
       "transfer": "Pass on a product",
-      "tickets": "See my tickets"
+      "tickets": "See my tickets",
+      "loyalty": "See my membership"
     },
     "today": {
       "title": "Your tickets",
@@ -772,6 +773,79 @@
     "setupTitle": "This wallet is being set up",
     "setupDescription": "It is not open yet. Nothing was signed in or changed. Please try again later.",
     "misdirectedTitle": "This wallet is not available at this address",
-    "misdirectedDescription": "Open it from the address you were given. Nothing was signed in or changed."
+    "misdirectedDescription": "Open it from the address you were given. Nothing was signed in or changed.",
+    "loyalty": {
+      "title": "Your membership",
+      "loading": "Checking your membership…",
+      "notJoined": "You haven't joined this programme yet.",
+      "join": "Join the programme",
+      "open": "Open your membership",
+      "unavailable": "We couldn't check your membership right now. This doesn't mean you have none.",
+      "retry": "Try again",
+      "sessionExpired": "Your session has ended.",
+      "signIn": "Sign in again"
+    }
+  },
+  "loyalty": {
+    "title": "Membership",
+    "description": "Join the programme and record the activities it counts.",
+    "loading": "Checking your membership…",
+    "membershipTitle": "Your membership",
+    "closed": "This programme isn't taking new members right now.",
+    "termsTitle": "Programme terms (version {version})",
+    "agree": "I agree to these terms (version {version})",
+    "join": "Join the programme",
+    "joining": "Sending your request…",
+    "joinNote": "Your request goes to the programme team, who approve every member. Nothing is created until they do.",
+    "consentRecord": "Programme record: you agreed to terms version {version} on {date}.",
+    "activityTitle": "Record an activity",
+    "activityType": "Activity",
+    "evidence": "What you did",
+    "evidenceHint": "A reference the programme can check, such as a receipt or sign-in number.",
+    "evidenceRequired": "Describe the activity so the programme can check it.",
+    "submit": "Submit activity",
+    "submitting": "Submitting…",
+    "submitNote": "The programme checks every activity. It counts only once they have verified it.",
+    "noActivities": "This programme doesn't list any activities yet.",
+    "submissionsTitle": "Activities you submitted from this wallet",
+    "noSubmissions": "You haven't submitted an activity from this wallet yet.",
+    "status": {
+      "pending_approval": "Your request to join is with the programme team.",
+      "declined": "The programme team didn't approve this request.",
+      "pending_creation": "Approved. Your membership is being created.",
+      "pending_pass": "Your membership was created, but its pass isn't in your wallet yet. Check again later.",
+      "active": "You're a member.",
+      "held": "Your membership is on hold. Activities can't be recorded until the programme team reinstates it.",
+      "ended": "Your membership has ended.",
+      "unconfirmed": "Your membership can't be confirmed right now. Nothing has been changed."
+    },
+    "submission": {
+      "unchecked": "Not checked on this page yet.",
+      "checking": "Checking…",
+      "submitted": "Submitted. Waiting for the programme to verify it.",
+      "counted": "Verified. This activity counts.",
+      "unknown": "Sent, but its outcome isn't confirmed yet. It won't be sent again.",
+      "not_received": "The programme didn't receive this. Nothing was recorded.",
+      "unconfirmed": "The programme answered, but this couldn't be confirmed. It won't be sent again.",
+      "failed": "We couldn't check this right now. It won't be sent again.",
+      "check": "Check status"
+    },
+    "failure": {
+      "unavailable": "We couldn't reach the programme right now. Nothing new was recorded. Try again.",
+      "retry": "Try again",
+      "session_expired": "Your session has ended. Nothing new was sent.",
+      "signIn": "Sign in again",
+      "capability_not_granted": "Membership isn't available in this wallet.",
+      "consent_required": "Agree to the terms to join.",
+      "consent_changed": "The terms changed since you read them. Read them again; nothing was recorded.",
+      "join_already_requested": "You already asked to join. Nothing new was recorded.",
+      "membership_exists": "You're already a member. Nothing new was recorded.",
+      "programme_closed": "This programme isn't taking new members. Nothing was recorded.",
+      "programme_not_found": "This programme can't be found. Nothing was recorded.",
+      "loyalty_activity_evidence_duplicate": "This activity was already submitted. Nothing new was recorded.",
+      "loyalty_activity_type_unknown": "The programme doesn't count this kind of activity. Nothing was recorded.",
+      "membership_not_active": "Your membership isn't active, so nothing was recorded.",
+      "submission_in_progress": "This activity was already sent. Check its status instead."
+    }
   }
 }

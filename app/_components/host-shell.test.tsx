@@ -30,6 +30,7 @@ const journeys = {
   quoteDecisions: true,
   transfer: true,
   tickets: false,
+  loyalty: false,
 };
 
 // The presentations api/wallet-host.ts hands the shells for the two fixture
@@ -192,6 +193,7 @@ const morrowHome: HostHomeView = {
     { entry: "settings", href: "/settings" },
   ],
   tickets: null,
+  loyalty: null,
 };
 const tidewellHome: HostHomeView = {
   brand: { brand: TIDEWELL.brand, logo: TIDEWELL.logo },
@@ -201,6 +203,7 @@ const tidewellHome: HostHomeView = {
   journeys: [],
   navigation: [{ entry: "products", href: "/products" }],
   tickets: null,
+  loyalty: null,
 };
 
 describe("HostHome", () => {

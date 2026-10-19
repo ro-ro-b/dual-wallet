@@ -59,7 +59,7 @@ async function home() {
   const element = (await Home()) as ReactElement<{
     signedIn: boolean;
     today: ReactElement<{
-      children: ReactElement<{ slug: string; href: string }>;
+      children: Array<ReactElement<{ slug: string; href: string }> | null>;
     }> | null;
   }>;
   expect(isValidElement(element)).toBe(true);
@@ -83,11 +83,14 @@ describe("the home route", () => {
     serve(ticketsOn());
     cookiePresent = true;
     const { today } = await home();
-    // Inside the providers: the island for exactly the configured face.
-    expect(today?.props.children.props).toEqual({
+    // Inside the providers: the island for exactly the configured face, and
+    // no membership card on a host without Loyalty.
+    const [tickets, loyalty] = today?.props.children ?? [];
+    expect(tickets?.props).toEqual({
       slug: "morrow-home",
       href: "/products/morrow-home/tickets",
     });
+    expect(loyalty).toBeNull();
   });
 
   it("is unchanged for a host without Tickets, signed in or out", async () => {

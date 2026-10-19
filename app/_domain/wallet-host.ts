@@ -7,9 +7,10 @@ import { isTaskPath, type RuntimeOperation } from "@/app/_domain/product-face";
 export const HOST_CONFIGURATION_SCHEMA = "dual-wallet-host-configuration-v1";
 
 /**
- * The journeys a host enables (the contract's order). `tickets` is opt-in: a
- * configuration may omit its key, which is the same as false, so every
- * configuration written before it existed keeps its canonical bytes.
+ * The journeys a host enables (the contract's order). `tickets` and
+ * `loyalty` are opt-in: a configuration may omit their keys, which is the
+ * same as false, so every configuration written before them keeps its
+ * canonical bytes.
  */
 export const hostJourneys = [
   "registration",
@@ -18,13 +19,20 @@ export const hostJourneys = [
   "quoteDecisions",
   "transfer",
   "tickets",
+  "loyalty",
 ] as const;
 export type HostJourney = (typeof hostJourneys)[number];
 export type HostJourneys = Record<HostJourney, boolean>;
 
+/** The opt-in journeys: an absent key is false. */
+export const optionalHostJourneys: readonly HostJourney[] = [
+  "tickets",
+  "loyalty",
+];
+
 /** The journeys every configuration states; the rest are opt-in keys. */
 export const requiredHostJourneys: readonly HostJourney[] = hostJourneys.filter(
-  (journey) => journey !== "tickets",
+  (journey) => !optionalHostJourneys.includes(journey),
 );
 
 /**
@@ -321,6 +329,8 @@ export function journeyOfJournalEntry(entry: {
   if (entry.kind === "transfer") return "transfer";
   // P4.3: an admission step belongs to the Tickets journey; no other flag.
   if (entry.kind === "admission") return "tickets";
+  // loyalty-join-earn-v1: a member's activity submission.
+  if (entry.kind === "loyalty") return "loyalty";
   if (
     entry.kind === "runtime" &&
     typeof entry.operation === "string" &&
@@ -357,6 +367,8 @@ export function journeysOfTask(task: string): HostJourney[] | undefined {
       return ["transfer"];
     case "tickets":
       return ["tickets"];
+    case "loyalty":
+      return ["loyalty"];
     default:
       return undefined;
   }
@@ -370,6 +382,7 @@ export const hostJourneyTasks: Record<HostJourney, string> = {
   quoteDecisions: "/service",
   transfer: "/",
   tickets: "/tickets",
+  loyalty: "/loyalty",
 };
 
 export const hostNavigationHrefs: Record<HostNavigationEntry, string> = {
@@ -425,4 +438,9 @@ export interface HostHomeView {
    * full list); null when the host does not serve Tickets.
    */
   tickets: { slug: string; href: string } | null;
+  /**
+   * The Loyalty face the signed-in home reads its membership card from;
+   * null when the host does not serve Loyalty.
+   */
+  loyalty: { slug: string; href: string } | null;
 }
