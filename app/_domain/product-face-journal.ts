@@ -245,7 +245,8 @@ export function parseJournalEntry(
     (entry.kind === "loyalty" &&
       (entry.operation !== LOYALTY_SUBMIT_OPERATION ||
         !entry.evidenceHash ||
-        !entry.activityType))
+        !entry.activityType ||
+        !entry.requestHash))
   ) {
     return undefined;
   }
@@ -413,6 +414,37 @@ export function sentLoyaltyStep(entry: FaceJournalEntry) {
 }
 
 /**
+ * loyalty-join-earn-v1: a submission the member confirmed (`prepare`), its
+ * exact request bound by hash, whose journal reached the browser BEFORE
+ * anything was sent. Nothing in this cookie says whether the one `submit`
+ * that follows it was dispatched (that answer may be lost whole, Set-Cookie
+ * included), so it counts as possibly sent: only read back under its
+ * original operation id, never sent again from it by another launch, and
+ * closed only by a `lapse` (proven never received).
+ */
+export function preparedLoyaltyStep(entry: FaceJournalEntry) {
+  return (
+    entry.kind === "loyalty" &&
+    entry.operation === LOYALTY_SUBMIT_OPERATION &&
+    entry.phase === "confirmed" &&
+    entry.issuedAt === undefined &&
+    Boolean(entry.requestHash)
+  );
+}
+
+/** A Loyalty submission that may have left the wallet: prepared or sent. */
+export const loyaltySubmission = (entry: FaceJournalEntry) =>
+  preparedLoyaltyStep(entry) || sentLoyaltyStep(entry);
+
+/**
+ * How long after `prepare` the one `submit` may still mint and dispatch it.
+ * The latest assertion a prepared submission can ever have is minted by
+ * then, so a later proof that the runtime never received it is bounded by
+ * this plus the assertion's own lifetime, never by the prepare time alone.
+ */
+export const LOYALTY_DISPATCH_WINDOW_MS = 30_000;
+
+/**
  * A registration a launch never issued but recorded from the runtime's own
  * settle proposal for its unit (contract r13: a fresh launch settled a
  * registration issued elsewhere): observed, or settled since. Found in another
@@ -521,6 +553,16 @@ export type JournalTransition =
       kind: "close";
       operationId: string;
       reason: JournalClosure["reason"];
+    }
+  | {
+      /**
+       * loyalty-join-earn-v1: a prepared submission whose possible
+       * assertion has expired and that the runtime answered never
+       * received for exactly its operation (the caller's proof): it wrote
+       * nothing and now never can.
+       */
+      kind: "lapse";
+      operationId: string;
     };
 
 export type JournalTransitionError =
@@ -635,6 +677,11 @@ export function applyJournalTransition(
       if (authorityLeft(existing.phase)) {
         return { ok: false, error: "operation_already_submitted" };
       }
+      // A prepared Loyalty submission may already have been sent: only a
+      // proven lapse closes it.
+      if (existing.kind === "loyalty") {
+        return { ok: false, error: "operation_conflict" };
+      }
       return replace({
         ...existing,
         phase: "cancelled",
@@ -657,6 +704,14 @@ export function applyJournalTransition(
         transition.requestHash !== undefined &&
         ((existing.kind !== "runtime" && existing.kind !== "loyalty") ||
           !isRequestHash(transition.requestHash))
+      ) {
+        return { ok: false, error: "operation_conflict" };
+      }
+      // Loyalty: exactly the request the member confirmed at prepare.
+      if (
+        existing.kind === "loyalty" &&
+        (!existing.requestHash ||
+          transition.requestHash !== existing.requestHash)
       ) {
         return { ok: false, error: "operation_conflict" };
       }
@@ -735,6 +790,16 @@ export function applyJournalTransition(
       }
       if (existing.discoverable) return { ok: true, entries, entry: existing };
       return replace({ ...existing, discoverable: true, updatedAt: now });
+    case "lapse":
+      if (!preparedLoyaltyStep(existing)) {
+        return { ok: false, error: "operation_conflict" };
+      }
+      return replace({
+        ...existing,
+        phase: "cancelled",
+        status: "not_submitted",
+        updatedAt: now,
+      });
     case "close":
       // Only on the runtime's own face_operation_not_found for exactly this
       // operation (the caller's proof); the history stays, nothing is deleted.
@@ -765,6 +830,8 @@ export function journalOperationStatus(
     | "not_owned"
     | undefined,
 ): RegistrationStatus {
+  // Prepared: its submit may have been dispatched; never "not submitted".
+  if (preparedLoyaltyStep(entry)) return "outcome_unknown";
   if (!authorityLeft(entry.phase)) return "not_submitted";
   // Closed: provably never accepted, whatever the unit shows since.
   if (entry.closure) return "not_submitted";

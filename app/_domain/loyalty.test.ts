@@ -351,6 +351,59 @@ describe("the proofs", () => {
     ).toBe("canonical_mismatch");
   });
 
+  it("a receipt at the canonical's own nonce is exactly its fresh map; an earlier one is historical", () => {
+    const written = receipt().writtenCustom;
+    const current = { ...canonical, custom: written };
+    const atNonce = receipt({
+      nextNonce: 3,
+      readbackContentHash: canonical.contentHash,
+    });
+    const tied = {
+      ...provider,
+      change: {
+        ...provider.change,
+        nextNonce: 3,
+        nextContentHash: canonical.contentHash,
+      },
+    };
+    expect(checkReceipt(atNonce, current, context, tied, HASH)).toBeNull();
+    // The same genuine action, signer, history, nonce and recomputed map
+    // hash, while the fresh map at that nonce still says Member.
+    expect(
+      checkReceipt(
+        atNonce,
+        { ...current, custom: { ...written, state: "Member" } },
+        context,
+        tied,
+        HASH,
+      ),
+    ).toBe("receipt_mismatch");
+    // Not the content hash C was read with.
+    expect(
+      checkReceipt(
+        { ...atNonce, readbackContentHash: "0xdddddddddddddddddddd" },
+        current,
+        context,
+        {
+          ...tied,
+          change: { ...tied.change, nextContentHash: "0xdddddddddddddddddddd" },
+        },
+        HASH,
+      ),
+    ).toBe("receipt_mismatch");
+    // Historical (C moved on since): its retained map is the runtime's
+    // record, tied by action, signer, nonce and content hash only.
+    expect(
+      checkReceipt(
+        receipt(),
+        { ...current, custom: { ...written, state: "Activity verified" } },
+        context,
+        provider,
+        HASH,
+      ),
+    ).toBeNull();
+  });
+
   it("a verification counts only as the very next change after the submission", () => {
     const verification = receipt({
       actionId: "act-0003",

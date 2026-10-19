@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { readJsonRecord } from "@/api/request";
 import {
+  prepareActivity,
   readMembershipView,
   readProgramme,
   requestJoin,
@@ -26,7 +27,8 @@ const KEYS = [
 // loyalty-join-earn-v1: the native Loyalty page's steps. The holder, wallet,
 // binding, programme and runtime come from the session and the server
 // registry; the body names only the step, the consent the member gave, the
-// activity they report, or one of their own operation ids.
+// activity they report, or one of their own operation ids. Only a step that
+// changes a submission carries the launch journal back (Set-Cookie).
 export async function POST(request: NextRequest, { params }: Params) {
   const { slug } = await params;
   const context = await resolveFaceRequest(request, slug, {
@@ -52,8 +54,19 @@ export async function POST(request: NextRequest, { params }: Params) {
           return requestJoin(context, body.consent);
         case "membership":
           return readMembershipView(context);
+        case "prepare":
+          return prepareActivity(
+            context,
+            body.activity_type,
+            body.evidence_ref,
+          );
         case "submit":
-          return submitActivity(context, body.activity_type, body.evidence_ref);
+          return submitActivity(
+            context,
+            body.operation_id,
+            body.activity_type,
+            body.evidence_ref,
+          );
         case "status":
           return submissionStatus(context, body.operation_id);
         default:

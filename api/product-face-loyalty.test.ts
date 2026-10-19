@@ -33,8 +33,24 @@ jest.mock("@/api/web-sdk-client", () => ({
   getObjectsApi: () => objectsApi,
   getEbusApi: () => ebusApi,
 }));
+/** A BFF failure injected AFTER the runtime answered (its proof reads). */
+const mockFault = { afterDispatch: false };
+jest.mock("@/api/loyalty-provider", () => {
+  const actual = jest.requireActual("@/api/loyalty-provider");
+  return {
+    ...actual,
+    publicAction: (...args: unknown[]) => {
+      if (mockFault.afterDispatch) {
+        throw new Error("the wallet BFF failed after the runtime answered");
+      }
+      return actual.publicAction(...args);
+    },
+  };
+});
 
+import { resetIssueGuard } from "@/api/product-face-operations";
 import { establishSessionState } from "@/api/server-session";
+import { ResponseError } from "@/api/web-sdk/runtime";
 import { resetWalletHostCache } from "@/api/wallet-host";
 import type { LoginOut } from "@/api/web-sdk/models/LoginOut";
 import { POST as loyaltyPOST } from "@/app/api/faces/[slug]/loyalty/route";
@@ -114,6 +130,12 @@ class Browser {
       else this.cookies.delete(cookie.name);
     }
   }
+  /** The same page in a second, concurrent request: the same cookies. */
+  twin() {
+    const next = new Browser(this.launchId);
+    next.cookies = new Map(this.cookies);
+    return next;
+  }
   /** The same browser after a reload: same cookies, a new launch. */
   reopen() {
     const next = new Browser(`launch-${"r".repeat(28)}`);
@@ -128,7 +150,12 @@ class Browser {
     }
     return next;
   }
-  async loyalty(body: Record<string, unknown>) {
+  /**
+   * One request to the real route. `lose` throws the ENTIRE answer away
+   * after the BFF ran it (body and Set-Cookie): the browser keeps exactly the
+   * cookies it sent.
+   */
+  async loyalty(body: Record<string, unknown>, { lose = false } = {}) {
     const response = await loyaltyPOST(
       new NextRequest(`http://localhost/api/faces/${SLUG}/loyalty`, {
         method: "POST",
@@ -143,9 +170,10 @@ class Browser {
       }),
       { params: Promise.resolve({ slug: SLUG }) },
     );
-    this.take(response);
     const parsed = (await response.json()) as Record<string, unknown>;
     seen.push(JSON.stringify(parsed));
+    if (lose) return { status: 0, body: {} };
+    this.take(response);
     return { status: response.status, body: parsed };
   }
 }
@@ -198,6 +226,8 @@ function world() {
   let approval: "pending" | "approved" | "declined" = "pending";
   let opening: Record<string, unknown> | null = null;
   let passCreated = false;
+  /** A dishonest runtime: its receipts claim maps C was never written with. */
+  let forging = false;
   const submissions = new Map<
     string,
     {
@@ -367,6 +397,32 @@ function world() {
         semantic: "verify_activity",
       };
     },
+    /** The runtime's receipts from here on claim maps never written. */
+    forgeSubmissions() {
+      forging = true;
+    },
+    /**
+     * A genuine issuer update at the very next nonce that left C a Member,
+     * claimed as this submission's verification (map rewritten, rehashed).
+     */
+    forgeVerification(operationId: string) {
+      const held = submissions.get(operationId)!;
+      const claimed = {
+        ...base("Activity verified"),
+        lifecycle: {
+          current_state: "Activity verified",
+          target_state: "Activity verified",
+          action_id: `${PURPOSE}_verify_activity_evt-${operationId}`,
+        },
+        proof_event: { public_fields: ["action:verify_activity"] },
+      };
+      held.verification = {
+        ...act(CANON, "update", ISSUER, base("Member")),
+        written_custom: claimed,
+        written_custom_hash: sha(canonicalJson(claimed)),
+        semantic: "verify_activity",
+      };
+    },
     /** Any other issuer change to the canonical record. */
     touch() {
       act(CANON, "update", ISSUER, base("Member"));
@@ -504,6 +560,17 @@ function world() {
           ];
         }
         case "loyalty.activity.submit": {
+          // Idempotent by operationId, looked up before any other check.
+          if (submissions.has(operationId)) {
+            return [
+              409,
+              {
+                ok: false,
+                status: "operation_already_received",
+                accounting: zero("operation_already_received"),
+              },
+            ];
+          }
           const evidenceHash = sha(String(input.evidence_ref));
           if (
             [...submissions.values()].some(
@@ -519,21 +586,26 @@ function world() {
               },
             ];
           }
+          const claimed = {
+            ...base("Activity pending"),
+            lifecycle: {
+              current_state: "Activity pending",
+              target_state: "Activity pending",
+              action_id: `${PURPOSE}_submit_activity_evt-${operationId}`,
+            },
+            proof_event: {
+              public_fields: [
+                "action:submit_activity",
+                `activityEvidenceHash:${evidenceHash}`,
+              ],
+            },
+          };
+          // Forging: a GENUINE issuer update that left C a Member, claimed
+          // as this submission with its retained map rewritten and rehashed.
           const receipt = {
-            ...act(CANON, "update", ISSUER, {
-              ...base("Activity pending"),
-              lifecycle: {
-                current_state: "Activity pending",
-                target_state: "Activity pending",
-                action_id: `${PURPOSE}_submit_activity_evt-${operationId}`,
-              },
-              proof_event: {
-                public_fields: [
-                  "action:submit_activity",
-                  `activityEvidenceHash:${evidenceHash}`,
-                ],
-              },
-            }),
+            ...act(CANON, "update", ISSUER, forging ? base("Member") : claimed),
+            written_custom: claimed,
+            written_custom_hash: sha(canonicalJson(claimed)),
             semantic: "submit_activity",
           };
           const submission = {
@@ -586,6 +658,8 @@ function world() {
 
 type World = ReturnType<typeof world>;
 let w: World;
+/** The holder's pass read: answered, or a provider failure / malformed body. */
+let passRead: "ok" | "malformed" | 401 | 403 | 404 | 503;
 /** Operations the fake runtime received, in order. */
 let received: Array<{ operation: string; operationId: string }>;
 /** Per-call overrides: lose a reply, lose a request, or rewrite one. */
@@ -654,6 +728,9 @@ const original = global.fetch;
 beforeEach(() => {
   seen = [];
   received = [];
+  passRead = "ok";
+  mockFault.afterDispatch = false;
+  resetIssueGuard();
   lose = new Set();
   neverReached = new Set();
   rewrite = (_operation, answer) => answer;
@@ -718,16 +795,36 @@ beforeEach(() => {
         return { stateChanges: picked };
       },
     );
+  // The holder's own list: newest first, at most 25 a page, every filter
+  // (id included) applied, like the provider's.
   objectsApi.listObjects
     .mockReset()
     .mockImplementation(
-      async (input: { owner: string; templateId: string }) => ({
-        objects: [...w.objects.values()].filter(
-          (object) =>
-            object.owner.toLowerCase() === input.owner.toLowerCase() &&
-            object.templateId === input.templateId,
-        ),
-      }),
+      async (input: {
+        id?: string;
+        owner: string;
+        templateId: string;
+        limit?: number;
+      }) => {
+        if (passRead !== "ok") {
+          if (passRead === "malformed") return { items: [] };
+          throw new ResponseError(
+            new Response(null, { status: passRead }),
+            "fictional provider failure",
+          );
+        }
+        return {
+          objects: [...w.objects.values()]
+            .reverse()
+            .filter(
+              (object) =>
+                object.owner.toLowerCase() === input.owner.toLowerCase() &&
+                object.templateId === input.templateId &&
+                (!input.id || object.id === input.id),
+            )
+            .slice(0, Math.min(input.limit ?? 25, 25)),
+        };
+      },
     );
   objectsApi.getObjectById.mockReset();
   ebusApi.listActionLogsPublic
@@ -754,6 +851,49 @@ const membership = async (browser: Browser) =>
   (await browser.loyalty({ transition: "membership" })).body;
 const count = (operation: string) =>
   received.filter((call) => call.operation === operation).length;
+
+/**
+ * The page's submission: `prepare` (journalled, returned, nothing sent),
+ * then one `submit` of exactly that operation. `lose` throws the submit's
+ * whole answer away, Set-Cookie included.
+ */
+async function prepare(browser: Browser, evidence = "Workshop sign-in 0042") {
+  return browser.loyalty({
+    transition: "prepare",
+    activity_type: "workshop",
+    evidence_ref: evidence,
+  });
+}
+const preparedId = (answer: { body: Record<string, unknown> }) =>
+  String((answer.body.prepared as Record<string, unknown>).operationId);
+async function submitPrepared(
+  browser: Browser,
+  operationId: string,
+  evidence = "Workshop sign-in 0042",
+  options: { lose?: boolean } = {},
+) {
+  return browser.loyalty(
+    {
+      transition: "submit",
+      operation_id: operationId,
+      activity_type: "workshop",
+      evidence_ref: evidence,
+    },
+    options,
+  );
+}
+async function submit(
+  browser: Browser,
+  evidence = "Workshop sign-in 0042",
+  options: { lose?: boolean } = {},
+) {
+  const prepared = await prepare(browser, evidence);
+  if (prepared.status !== 200) return prepared;
+  return submitPrepared(browser, preparedId(prepared), evidence, options);
+}
+const statusOf = async (browser: Browser, operationId: unknown) =>
+  (await browser.loyalty({ transition: "status", operation_id: operationId }))
+    .body.submission as Record<string, unknown>;
 
 /** Joined, approved, created and passed: a proven active member. */
 async function activeMember(browser = new Browser()) {
@@ -952,11 +1092,7 @@ describe("membership is active only from fresh, exact, role-bound evidence", () 
 describe("activity: submitted, then counted, only from proof of exactly this submission", () => {
   it("submits once, journalled, and proves it submitted from the issuer-signed receipt and history", async () => {
     const browser = await activeMember();
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     expect(sent.status).toBe(200);
     expect(sent.body.submission).toEqual(
       expect.objectContaining({
@@ -976,11 +1112,7 @@ describe("activity: submitted, then counted, only from proof of exactly this sub
 
   it("counts it only when the verifier's update is the very next change after it", async () => {
     const browser = await activeMember();
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     const operationId = String(
       (sent.body.submission as Record<string, unknown>).operationId,
     );
@@ -1005,11 +1137,7 @@ describe("activity: submitted, then counted, only from proof of exactly this sub
 
   it("a later or unrelated verified action is never proof of this submission", async () => {
     const browser = await activeMember();
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     const operationId = String(
       (sent.body.submission as Record<string, unknown>).operationId,
     );
@@ -1067,11 +1195,7 @@ describe("activity: submitted, then counted, only from proof of exactly this sub
             },
           ]
         : [status, body];
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     expect(sent.body.submission).toEqual(
       expect.objectContaining({ status: "unconfirmed" }),
     );
@@ -1079,16 +1203,8 @@ describe("activity: submitted, then counted, only from proof of exactly this sub
 
   it("a duplicate is the runtime's exact zero-write refusal; a refusal without accounting stays unknown", async () => {
     const browser = await activeMember();
-    await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
-    const again = await browser.reopen().loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    await submit(browser, "Workshop sign-in 0042");
+    const again = await submit(browser.reopen(), "Workshop sign-in 0042");
     expect(again.body).toEqual(
       expect.objectContaining({ code: "loyalty_activity_evidence_duplicate" }),
     );
@@ -1096,11 +1212,7 @@ describe("activity: submitted, then counted, only from proof of exactly this sub
       operation === "loyalty.activity.submit"
         ? [409, { ok: false, status: "loyalty_activity_evidence_duplicate" }]
         : [status, body];
-    const unaccounted = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0043",
-    });
+    const unaccounted = await submit(browser, "Workshop sign-in 0043");
     expect(unaccounted.body.submission).toEqual(
       expect.objectContaining({ status: "unknown" }),
     );
@@ -1109,11 +1221,7 @@ describe("activity: submitted, then counted, only from proof of exactly this sub
   it("refuses to submit for a membership that is not proven active", async () => {
     const browser = new Browser();
     await browser.loyalty({ transition: "join", consent });
-    const refused = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const refused = await submit(browser, "Workshop sign-in 0042");
     expect(refused.body).toEqual(
       expect.objectContaining({ code: "membership_not_active" }),
     );
@@ -1132,11 +1240,7 @@ describe("the application record and the Dual object are distinct identities", (
       status: "active",
       membership: expect.objectContaining({ objectId: CANON }),
     });
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     expect(sent.body.submission).toEqual(
       expect.objectContaining({ status: "submitted" }),
     );
@@ -1175,11 +1279,7 @@ describe("the application record and the Dual object are distinct identities", (
         },
       ];
     };
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     expect(sent.body.submission).toEqual(
       expect.objectContaining({ status: "unconfirmed" }),
     );
@@ -1242,24 +1342,14 @@ describe("a lost reply keeps the original operation, across reloads and sign-ins
   it("is unknown, never sent again, and read back only by its own operation", async () => {
     const browser = await activeMember();
     lose.add("loyalty.activity.submit");
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     const submission = sent.body.submission as Record<string, unknown>;
     expect(submission.status).toBe("unknown");
     // The same evidence again, from a reloaded page: refused, nothing sent.
     const reloaded = browser.reopen();
-    expect(
-      (
-        await reloaded.loyalty({
-          transition: "submit",
-          activity_type: "workshop",
-          evidence_ref: "Workshop sign-in 0042",
-        })
-      ).body,
-    ).toEqual(expect.objectContaining({ code: "submission_in_progress" }));
+    expect((await submit(reloaded, "Workshop sign-in 0042")).body).toEqual(
+      expect.objectContaining({ code: "submission_in_progress" }),
+    );
     expect(count("loyalty.activity.submit")).toBe(1);
     // A new session of the same wallet finds it and reads its status only.
     const again = reloaded.signInAgain();
@@ -1280,11 +1370,7 @@ describe("a lost reply keeps the original operation, across reloads and sign-ins
   it("a runtime that never received it is believed only once its assertion expired", async () => {
     const browser = await activeMember();
     neverReached.add("loyalty.activity.submit");
-    const sent = await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    const sent = await submit(browser, "Workshop sign-in 0042");
     const submission = sent.body.submission as Record<string, unknown>;
     expect(submission.status).toBe("unknown");
     expect(count("loyalty.activity.submit")).toBe(0);
@@ -1307,11 +1393,7 @@ describe("a lost reply keeps the original operation, across reloads and sign-ins
   it("an expired session refuses before any runtime call and keeps the journal", async () => {
     const browser = await activeMember();
     lose.add("loyalty.activity.submit");
-    await browser.loyalty({
-      transition: "submit",
-      activity_type: "workshop",
-      evidence_ref: "Workshop sign-in 0042",
-    });
+    await submit(browser, "Workshop sign-in 0042");
     const calls = received.length;
     getWallet.mockRejectedValueOnce(
       Object.assign(new Error("expired"), { response: { status: 401 } }),
@@ -1323,5 +1405,292 @@ describe("a lost reply keeps the original operation, across reloads and sign-ins
     // Signed in again: the original operation is still there to read back.
     const again = browser.signInAgain();
     expect((await membership(again)).submissions).toHaveLength(1);
+  });
+});
+
+describe("a submission is in the browser's journal before it can leave (§6)", () => {
+  const launchJar = (browser: Browser) =>
+    [...browser.cookies].filter(([name]) => name.includes("face_launch"));
+  const submits = () =>
+    received.filter((call) => call.operation === "loyalty.activity.submit");
+
+  it("reads and the join carry no launch journal; prepare does, and sends nothing", async () => {
+    const browser = new Browser();
+    await browser.loyalty({ transition: "programme" });
+    await browser.loyalty({ transition: "join", consent });
+    w.approve();
+    w.create();
+    w.pass();
+    await membership(browser);
+    expect(launchJar(browser)).toEqual([]);
+    const prepared = await prepare(browser);
+    expect(prepared.status).toBe(200);
+    expect(launchJar(browser)).toHaveLength(1);
+    expect(count("loyalty.activity.submit")).toBe(0);
+    // Listed (possibly sent) from the moment its journal reached the browser.
+    expect((await membership(browser)).submissions).toEqual([
+      { operationId: preparedId(prepared), activityType: "workshop" },
+    ]);
+  });
+
+  it("a submit answer lost whole after the write: the prepared journal finds the original operation, read back only", async () => {
+    const browser = await activeMember();
+    const operationId = preparedId(await prepare(browser));
+    // The runtime writes once; the browser never sees the answer or its cookie.
+    await submitPrepared(browser, operationId, "Workshop sign-in 0042", {
+      lose: true,
+    });
+    expect(w.submissions.has(operationId)).toBe(true);
+    for (const next of [browser.reopen(), browser.signInAgain()]) {
+      expect((await membership(next)).submissions).toEqual([
+        { operationId, activityType: "workshop" },
+      ]);
+      // The same evidence again: refused, nothing prepared or sent.
+      expect((await prepare(next)).body).toEqual(
+        expect.objectContaining({ code: "submission_in_progress" }),
+      );
+      expect(await statusOf(next, operationId)).toEqual(
+        expect.objectContaining({ operationId, status: "submitted" }),
+      );
+    }
+    // The page replaying its stale prepared journal: not sent again here.
+    expect((await submitPrepared(browser, operationId)).body).toEqual(
+      expect.objectContaining({ code: "submission_in_progress" }),
+    );
+    // One write, under its original id; every status read named that id.
+    expect(submits()).toEqual([
+      { operation: "loyalty.activity.submit", operationId },
+    ]);
+    expect(
+      received
+        .filter((call) => call.operation === "loyalty.activity.status")
+        .every((call) => call.operationId === operationId),
+    ).toBe(true);
+    expect(w.logs.size).toBe(3);
+  });
+
+  it("past the same-instance damper (another instance), a stale replay is the runtime's operation_already_received: unknown, never a refusal", async () => {
+    const browser = await activeMember();
+    const operationId = preparedId(await prepare(browser));
+    await submitPrepared(browser, operationId, "Workshop sign-in 0042", {
+      lose: true,
+    });
+    resetIssueGuard();
+    const replay = await submitPrepared(browser, operationId);
+    expect(replay.body.submission).toEqual(
+      expect.objectContaining({ operationId, status: "unknown" }),
+    );
+    // The same operation id, never a new one; still written once.
+    expect(submits().map((call) => call.operationId)).toEqual([
+      operationId,
+      operationId,
+    ]);
+    expect(w.logs.size).toBe(3);
+    expect(await statusOf(browser, operationId)).toEqual(
+      expect.objectContaining({ status: "submitted" }),
+    );
+  });
+
+  it("a BFF failure after the runtime wrote returns the issued journal as unknown; lost whole, the prepared one still finds it", async () => {
+    const browser = await activeMember();
+    const first = preparedId(await prepare(browser));
+    mockFault.afterDispatch = true;
+    const kept = await submitPrepared(browser, first);
+    mockFault.afterDispatch = false;
+    expect(kept.status).toBe(200);
+    expect(kept.body.submission).toEqual(
+      expect.objectContaining({ operationId: first, status: "unknown" }),
+    );
+    expect(await statusOf(browser, first)).toEqual(
+      expect.objectContaining({ status: "submitted" }),
+    );
+
+    const second = preparedId(await prepare(browser, "Workshop sign-in 0043"));
+    mockFault.afterDispatch = true;
+    await submitPrepared(browser, second, "Workshop sign-in 0043", {
+      lose: true,
+    });
+    mockFault.afterDispatch = false;
+    const reloaded = browser.reopen();
+    expect(
+      (
+        (await membership(reloaded)).submissions as Array<{
+          operationId: string;
+        }>
+      ).map((item) => item.operationId),
+    ).toEqual(expect.arrayContaining([first, second]));
+    expect(await statusOf(reloaded, second)).toEqual(
+      expect.objectContaining({ status: "submitted" }),
+    );
+    expect(submits().map((call) => call.operationId)).toEqual([first, second]);
+  });
+
+  it("two concurrent submits of one prepared operation dispatch once; the other writes no journal", async () => {
+    const browser = await activeMember();
+    const operationId = preparedId(await prepare(browser));
+    const twin = browser.twin();
+    const before = launchJar(twin);
+    const answers = await Promise.all([
+      submitPrepared(browser, operationId),
+      submitPrepared(twin, operationId),
+    ]);
+    expect(answers.map((answer) => answer.status).sort()).toEqual([200, 409]);
+    const refused = answers.find((answer) => answer.status === 409)!;
+    expect(refused.body).toEqual(
+      expect.objectContaining({ code: "submission_in_progress" }),
+    );
+    expect(submits()).toHaveLength(1);
+    if (answers[1] === refused) expect(launchJar(twin)).toEqual(before);
+  });
+
+  it("two concurrent prepares from one page: only the operation the browser's journal kept can be sent", async () => {
+    const browser = await activeMember();
+    const twin = browser.twin();
+    const [first, second] = await Promise.all([
+      prepare(browser),
+      prepare(twin),
+    ]);
+    expect([first.status, second.status]).toEqual([200, 200]);
+    // The page's one launch cookie is the later answer's (here the twin's).
+    expect((await submitPrepared(twin, preparedId(first))).body).toEqual(
+      expect.objectContaining({ code: "unknown_operation" }),
+    );
+    expect(submits()).toHaveLength(0);
+    expect(
+      (await submitPrepared(twin, preparedId(second))).body.submission,
+    ).toEqual(expect.objectContaining({ status: "submitted" }));
+    expect(submits()).toHaveLength(1);
+  });
+
+  it("past its window a prepared submission is never minted or sent", async () => {
+    const browser = await activeMember();
+    const t0 = Date.now();
+    const clock = jest.spyOn(Date, "now").mockReturnValue(t0);
+    const operationId = preparedId(await prepare(browser));
+    clock.mockReturnValue(t0 + 31_000);
+    expect((await submitPrepared(browser, operationId)).body).toEqual(
+      expect.objectContaining({ code: "submission_window_closed" }),
+    );
+    expect(
+      runtimeFetch.mock.calls.some(([, init]) =>
+        String(init.body).includes('"loyalty.activity.submit"'),
+      ),
+    ).toBe(false);
+    // Still possibly sent as far as this cookie can tell: listed, read back.
+    expect((await membership(browser)).submissions).toEqual([
+      { operationId, activityType: "workshop" },
+    ]);
+  });
+
+  it("not_received waits for the latest assertion it could have had, never for the prepare time alone", async () => {
+    const browser = await activeMember();
+    const t0 = Date.now();
+    const clock = jest.spyOn(Date, "now").mockReturnValue(t0);
+    const operationId = preparedId(await prepare(browser));
+    // Minted and dispatched at the end of its window; it never arrives
+    // (yet), and the answer is lost whole: the cookie says only "prepared".
+    clock.mockReturnValue(t0 + 29_000);
+    neverReached.add("loyalty.activity.submit");
+    await submitPrepared(browser, operationId, "Workshop sign-in 0042", {
+      lose: true,
+    });
+    // 120 s after prepare is NOT 120 s after that assertion.
+    clock.mockReturnValue(t0 + 121_000);
+    expect(await statusOf(browser, operationId)).toEqual(
+      expect.objectContaining({ status: "unknown" }),
+    );
+    clock.mockReturnValue(t0 + 149_000);
+    expect(await statusOf(browser, operationId)).toEqual(
+      expect.objectContaining({ status: "unknown" }),
+    );
+    // Window plus the assertion's lifetime and skew: never received, never can be.
+    clock.mockReturnValue(t0 + 151_000);
+    expect(await statusOf(browser, operationId)).toEqual(
+      expect.objectContaining({ status: "not_received" }),
+    );
+    expect((await membership(browser)).submissions).toEqual([]);
+    expect(count("loyalty.activity.submit")).toBe(0);
+  });
+});
+
+describe("a receipt at the canonical's current nonce is its fresh full map", () => {
+  it("a genuine update claimed as this submission over a map C was never written with is never submitted", async () => {
+    const browser = await activeMember();
+    w.forgeSubmissions();
+    const sent = await submit(browser);
+    const submission = sent.body.submission as Record<string, unknown>;
+    expect(submission.status).toBe("unconfirmed");
+    // Its action, signer, state change, nonce and hash are all genuine; the
+    // fresh and public map at that nonce still say Member.
+    expect(w.objects.get(CANON)!.custom.state).toBe("Member");
+    expect(await statusOf(browser, submission.operationId)).toEqual(
+      expect.objectContaining({ status: "unconfirmed" }),
+    );
+  });
+
+  it("a genuine next update claimed as its verification over a map C was never written with is never counted", async () => {
+    const browser = await activeMember();
+    const sent = await submit(browser);
+    const operationId = String(
+      (sent.body.submission as Record<string, unknown>).operationId,
+    );
+    expect(sent.body.submission).toEqual(
+      expect.objectContaining({ status: "submitted" }),
+    );
+    w.forgeVerification(operationId);
+    expect(w.objects.get(CANON)!.custom.state).toBe("Member");
+    // The submission stays proven (historical receipt); it is not counted.
+    expect(await statusOf(browser, operationId)).toEqual(
+      expect.objectContaining({ status: "submitted" }),
+    );
+  });
+});
+
+describe("the holder's pass is read by its exact id, and an unavailable read claims no absence", () => {
+  it("finds the named pass behind more than a page of newer passes of its template", async () => {
+    const browser = await activeMember();
+    for (let index = 0; index < 30; index += 1) {
+      const id = `6c000000000000000000e0${index.toString(16).padStart(2, "0")}`;
+      w.objects.set(id, { ...w.objects.get(PASS)!, id, custom: {} });
+    }
+    expect((await membership(browser)).membership).toEqual(
+      expect.objectContaining({ status: "active" }),
+    );
+    expect(objectsApi.listObjects).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: PASS,
+        owner: HOLDER,
+        templateId: PASS_TEMPLATE,
+      }),
+      expect.anything(),
+    );
+  });
+
+  it.each([[503], [403], ["malformed"]] as const)(
+    "a %s pass read is unconfirmed, never 'not in your wallet yet'",
+    async (fault) => {
+      const browser = await activeMember();
+      passRead = fault;
+      expect((await membership(browser)).membership).toEqual({
+        status: "unconfirmed",
+      });
+    },
+  );
+
+  it("only an exact empty or not-found read is pending its pass; a 401 is an expired session", async () => {
+    const browser = await activeMember();
+    passRead = 404;
+    expect((await membership(browser)).membership).toEqual({
+      status: "pending_pass",
+    });
+    passRead = "ok";
+    w.objects.get(PASS)!.owner = FORGER;
+    expect((await membership(browser)).membership).toEqual({
+      status: "pending_pass",
+    });
+    passRead = 401;
+    expect((await browser.loyalty({ transition: "membership" })).status).toBe(
+      401,
+    );
   });
 });

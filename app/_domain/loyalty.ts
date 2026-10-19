@@ -747,9 +747,12 @@ const STATE_OF: Record<ReceiptSemantic, string> = {
 };
 
 /**
- * §5 (1)-(4): one action receipt on C, its retained full map (hash checked
+ * §5 (1)-(5): one action receipt on C, its retained full map (hash checked
  * by the caller as `writtenHashMatches`), its signer from the public action
- * log and its place in the public state history.
+ * log and its place in the public state history. A receipt AT C's nonce is
+ * C's current state, so its map must be exactly C's fresh full map (5); an
+ * earlier one is historical: its retained map is the runtime's record,
+ * provider-tied by action, signer, nonce and content hash only.
  */
 export function checkReceipt(
   receipt: ActionReceipt,
@@ -774,6 +777,10 @@ export function checkReceipt(
     receipt.objectId !== canonical.objectId ||
     lower(receipt.account) !== rules.canonicalIssuerAccount ||
     receipt.nextNonce > canonical.nonce ||
+    // (5) Current: the very map and content hash C was read with, now.
+    (receipt.nextNonce === canonical.nonce &&
+      (!sameJson(written, canonical.custom) ||
+        receipt.readbackContentHash !== canonical.contentHash)) ||
     written.generic_semantic_purpose !== LOYALTY_PURPOSE ||
     // Like with like: the receipt's record reference against the fresh
     // canonical record reference; its object id is checked above.

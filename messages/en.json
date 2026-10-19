@@ -824,7 +824,7 @@
       "checking": "Checking…",
       "submitted": "Submitted. Waiting for the programme to verify it.",
       "counted": "Verified. This activity counts.",
-      "unknown": "Sent, but its outcome isn't confirmed yet. It won't be sent again.",
+      "unknown": "This may have been sent, but its outcome isn't confirmed yet. It won't be sent again.",
       "not_received": "The programme didn't receive this. Nothing was recorded.",
       "unconfirmed": "The programme answered, but this couldn't be confirmed. It won't be sent again.",
       "failed": "We couldn't check this right now. It won't be sent again.",

@@ -12,6 +12,7 @@ import {
   publicStateChange,
 } from "@/api/loyalty-provider";
 import {
+  claimIssue,
   fail,
   journalStatus,
   mint,
@@ -48,20 +49,34 @@ import {
 } from "@/app/_domain/loyalty";
 import {
   applyJournalTransition,
+  LOYALTY_DISPATCH_WINDOW_MS,
   LOYALTY_SUBMIT_OPERATION,
-  sentLoyaltyStep,
+  loyaltySubmission,
+  preparedLoyaltyStep,
   type FaceJournalEntry,
   type JournalTransition,
 } from "@/app/_domain/product-face-journal";
-import type { RegistrationStatus } from "@/app/_domain/product-face";
+import {
+  isOperationId,
+  type RegistrationStatus,
+} from "@/app/_domain/product-face";
 
 // loyalty-join-earn-v1 (docs/proposals/loyalty-join-earn-v1.md): the wallet
 // BFF side of a member's native join and earn. Every runtime call is one
 // server-to-server request with a one-time, operation-bound face assertion;
 // the holder is always the session's. Nothing is said about Dual that this
-// request did not prove from a fresh read (§5). A submission is journalled
-// before it leaves the wallet and is then only ever read back under its
-// original operation: never sent again.
+// request did not prove from a fresh read (§5).
+//
+// A submission is two requests (§6). `prepare` journals the operation, its
+// evidence hash and its exact request hash and returns that journal to the
+// browser; nothing is sent. Only then does `submit` dispatch exactly that
+// prepared operation, once. Its answer may be lost whole (Set-Cookie too):
+// the browser still holds the prepared journal, so the original operation
+// is found again and only ever read back, never sent again.
+//
+// Only a transition that changes a submission writes the launch journal.
+// A read's or a join's mint never leaves the BFF, and a slower read's
+// cookie must never overwrite a newer prepared one.
 
 /** The binding's Loyalty rules where this host serves them; else none. */
 export function loyaltyRules(context: FaceRequestContext): LoyaltyRules | null {
@@ -146,10 +161,9 @@ function applyIn(
     : fail(result.error, journalStatus[result.error]);
 }
 
-const unavailable = (journal: FaceJournal) => ({
-  ...fail("runtime_unavailable", 502),
-  journal,
-});
+const unavailable = () => fail("runtime_unavailable", 502);
+/** A failure to the browser without this request's journal. */
+const bare = ({ code, status }: FaceOperationFailure) => fail(code, status);
 
 // ------------------------------------------------------------- proofs
 
@@ -231,8 +245,13 @@ async function proveMembership(
     proof.rules.passTemplateId,
     answer.pass.objectId,
   );
-  if (!read.ok) return read;
-  // Created, but the holder's own wallet does not hold its pass (yet).
+  if (!read.ok) {
+    // A refused, failed or ambiguous read proves no absence either.
+    return read.code === "session_expired"
+      ? { ok: false, code: read.code }
+      : unconfirmed;
+  }
+  // Created, and the exact read says the holder does not hold its pass (yet).
   if (!read.pass) return { ok: true, view: { status: "pending_pass" } };
   const mintChange = await firstStateChange(read.pass.id);
   const passMint =
@@ -278,13 +297,13 @@ export async function readProgramme(
     null,
     {},
   );
-  if (!called.ok) return called.failure;
-  const { journal, answer } = called;
+  if (!called.ok) return bare(called.failure);
+  const { answer } = called;
   const programme =
     answer.reached && answer.status === 200
       ? parseProgrammeRead(answer.body, rules)
       : undefined;
-  return programme ? { ok: true, journal, programme } : unavailable(journal);
+  return programme ? { ok: true, programme } : unavailable();
 }
 
 const CONSENT_KEYS = ["accepted", "terms_version", "fingerprint"];
@@ -334,18 +353,19 @@ export async function requestJoin(
       },
     },
   );
-  if (!called.ok) return called.failure;
-  const { journal, answer } = called;
+  if (!called.ok) return bare(called.failure);
+  const { answer } = called;
   const parsed = answer.reached
     ? parseJoinAnswer(answer.status, answer.body)
     : undefined;
-  if (!parsed) return unavailable(journal);
-  return parsed.ok
-    ? { ok: true, journal, join: parsed.join }
-    : { ...fail(parsed.reason, 409), journal };
+  if (!parsed) return unavailable();
+  return parsed.ok ? { ok: true, join: parsed.join } : fail(parsed.reason, 409);
 }
 
-/** This wallet's own submissions for this programme, here and in other launches. */
+/**
+ * This wallet's own submissions for this programme, prepared or sent, here
+ * and in other launches (a reload, a sign-in since).
+ */
 function ownSubmissions(context: FaceRequestContext) {
   const seen = new Set<string>();
   return [
@@ -353,7 +373,7 @@ function ownSubmissions(context: FaceRequestContext) {
     ...readFaceLoyaltyHistory(context.request, context.scope),
   ].filter((entry) => {
     if (
-      !sentLoyaltyStep(entry) ||
+      !loyaltySubmission(entry) ||
       // A refused or never-received submission wrote nothing: not listed.
       entry.status === "not_submitted" ||
       entry.slug !== context.binding.slug ||
@@ -364,6 +384,31 @@ function ownSubmissions(context: FaceRequestContext) {
     seen.add(entry.operationId);
     return true;
   });
+}
+
+/** Possibly sent and its outcome not proven: prepared, or issued and open. */
+const unresolved = (entry: FaceJournalEntry) =>
+  preparedLoyaltyStep(entry) || entry.phase === "assertion_issued";
+
+/** The one exact runtime request a submission is, bound at prepare. */
+function submitRequest(
+  rules: LoyaltyRules,
+  operationId: string,
+  objectId: string,
+  activityType: string,
+  evidenceRef: string,
+) {
+  const target = { model_id: rules.modelId, object_id: objectId };
+  const input = { activity_type: activityType, evidence_ref: evidenceRef };
+  return {
+    input,
+    requestHash: runtimeRequestHash({
+      operation: LOYALTY_SUBMIT_OPERATION,
+      operationId,
+      target,
+      input,
+    }),
+  };
 }
 
 async function readMembership(
@@ -383,19 +428,18 @@ async function readMembership(
     null,
     {},
   );
-  if (!called.ok) return called.failure;
+  if (!called.ok) return bare(called.failure);
   const parsed =
     called.answer.reached && called.answer.status === 200
       ? parseMembershipAnswer(called.answer.body)
       : undefined;
-  if (!parsed) return unavailable(called.journal);
+  if (!parsed) return unavailable();
   const proven = await proveMembership(
     context,
     proofContext(context, rules),
     parsed,
   );
-  if (!proven.ok)
-    return { ...fail("session_expired", 401), journal: called.journal };
+  if (!proven.ok) return fail("session_expired", 401);
   return { ok: true, journal: called.journal, proven };
 }
 
@@ -412,7 +456,6 @@ export async function readMembershipView(context: FaceRequestContext): Promise<
   if (!read.ok) return read;
   return {
     ok: true,
-    journal: read.journal,
     membership: read.proven.view,
     // Listed only: each status is proven by its own status read.
     submissions: ownSubmissions(context).map((entry) => ({
@@ -444,130 +487,249 @@ function settled(
   return "entries" in next ? next : journal;
 }
 
+function validActivity(activityType: unknown, evidenceRef: unknown) {
+  return (
+    typeof activityType === "string" &&
+    ACTIVITY_TYPE.test(activityType) &&
+    validEvidenceRef(evidenceRef)
+  );
+}
+
 /**
- * §4.4: one activity submission for the holder's proven active membership,
- * journalled before it leaves; a lost or unprovable reply stays unknown.
+ * §4.4, step one: the member's confirmed submission, for the holder's proven
+ * active membership, journalled with its exact request hash and returned to
+ * the browser. Nothing is sent: this journal is what lets a lost submit
+ * answer be found again. One unresolved attempt per evidence.
  */
-export async function submitActivity(
+export async function prepareActivity(
   context: FaceRequestContext,
   activityType: unknown,
   evidenceRef: unknown,
-): Promise<LoyaltyResult<{ submission: LoyaltySubmissionView }>> {
+): Promise<
+  LoyaltyResult<{ prepared: { operationId: string; activityType: string } }>
+> {
   const rules = loyaltyRules(context);
   if (!rules) return fail("capability_not_granted", 403);
-  if (
-    typeof activityType !== "string" ||
-    !ACTIVITY_TYPE.test(activityType) ||
-    !validEvidenceRef(evidenceRef)
-  ) {
+  if (!validActivity(activityType, evidenceRef)) {
     return fail("invalid_request", 400);
   }
-  const evidenceHash = sha256Hash(evidenceRef);
-  // One unresolved attempt per evidence: never a second send of the same.
+  const type = activityType as string;
+  const evidence = evidenceRef as string;
+  const evidenceHash = sha256Hash(evidence);
   if (
     ownSubmissions(context).some(
-      (entry) =>
-        entry.phase === "assertion_issued" &&
-        entry.evidenceHash === evidenceHash,
+      (entry) => unresolved(entry) && entry.evidenceHash === evidenceHash,
     )
   ) {
     return fail("submission_in_progress", 409);
   }
   // Fresh proof that this holder's membership is active, now.
   const membership = await readMembership(context, context.journal, rules);
-  if (!membership.ok) return membership;
-  let journal = membership.journal;
+  if (!membership.ok) return bare(membership);
   const canonical = membership.proven.canonical;
   if (membership.proven.view.status !== "active" || !canonical) {
-    return { ...fail("membership_not_active", 409), journal };
+    return fail("membership_not_active", 409);
   }
-  const proof = proofContext(context, rules);
   const operationId = operationIdOf("loy");
-  const input = { activity_type: activityType, evidence_ref: evidenceRef };
-  const target = { model_id: rules.modelId, object_id: canonical.objectId };
-  const requestHash = runtimeRequestHash({
-    operation: LOYALTY_SUBMIT_OPERATION,
-    operationId,
-    target,
-    input,
-  });
-  const called = await call(
-    context,
-    journal,
+  const { requestHash } = submitRequest(
     rules,
-    "loyalty.activity.submit",
     operationId,
     canonical.objectId,
-    input,
-    (minted) => {
-      let next: FaceJournal | FaceOperationFailure = applyIn(minted, {
-        kind: "begin",
-        entry: {
-          operationId,
-          kind: "loyalty",
-          operation: LOYALTY_SUBMIT_OPERATION,
-          slug: context.binding.slug,
-          programmeId: context.binding.programmeId,
-          objectId: canonical.objectId,
-          evidenceHash,
-          activityType,
-        },
-      });
-      for (const transition of [
-        { kind: "confirm", operationId, objectId: canonical.objectId },
-        {
-          kind: "issue",
-          operationId,
-          objectId: canonical.objectId,
-          requestHash,
-        },
-      ] as JournalTransition[]) {
-        if (!("entries" in next)) return next;
-        next = applyIn(next, transition);
-      }
-      return next;
+    type,
+    evidence,
+  );
+  let journal: FaceJournal | FaceOperationFailure = applyIn(
+    membership.journal,
+    {
+      kind: "begin",
+      entry: {
+        operationId,
+        kind: "loyalty",
+        operation: LOYALTY_SUBMIT_OPERATION,
+        slug: context.binding.slug,
+        programmeId: context.binding.programmeId,
+        objectId: canonical.objectId,
+        evidenceHash,
+        activityType: type,
+        requestHash,
+      },
     },
   );
-  if (!called.ok)
-    return { ...called.failure, journal: called.failure.journal ?? journal };
-  journal = called.journal;
-  const entry = { operationId, activityType };
-  if (!called.answer.reached) {
-    return { ok: true, journal, submission: submissionView(entry, "unknown") };
+  if ("entries" in journal) {
+    journal = applyIn(journal, {
+      kind: "confirm",
+      operationId,
+      objectId: canonical.objectId,
+    });
   }
-  const answer = parseSubmitAnswer(called.answer.status, called.answer.body);
-  if (answer.kind === "refused") {
-    // Exact zero-write accounting for exactly this reason: nothing was written.
-    return {
-      ...fail(answer.reason, 409),
-      journal: settled(journal, operationId, "not_submitted"),
-    };
+  if (!("entries" in journal)) return bare(journal);
+  return {
+    ok: true,
+    journal,
+    prepared: { operationId, activityType: type },
+  };
+}
+
+/**
+ * §4.4, step two: dispatch exactly the prepared operation of THIS launch,
+ * once, within its window. Whatever happens after it may have left (a lost
+ * or unprovable reply, a thrown error), the answer is `unknown` with the
+ * issued journal; it is never sent again.
+ */
+export async function submitActivity(
+  context: FaceRequestContext,
+  operationId: unknown,
+  activityType: unknown,
+  evidenceRef: unknown,
+): Promise<LoyaltyResult<{ submission: LoyaltySubmissionView }>> {
+  const rules = loyaltyRules(context);
+  if (!rules) return fail("capability_not_granted", 403);
+  if (
+    !isOperationId(operationId) ||
+    !validActivity(activityType, evidenceRef)
+  ) {
+    return fail("invalid_request", 400);
   }
-  if (answer.kind === "unknown") {
-    return { ok: true, journal, submission: submissionView(entry, "unknown") };
+  const type = activityType as string;
+  const evidence = evidenceRef as string;
+  const evidenceHash = sha256Hash(evidence);
+  const entry = context.journal.entries.find(
+    (item) => item.operationId === operationId,
+  );
+  if (
+    !entry ||
+    entry.kind !== "loyalty" ||
+    entry.slug !== context.binding.slug
+  ) {
+    return fail("unknown_operation", 404);
   }
-  const proven =
-    answer.submission.evidenceHash === evidenceHash &&
-    answer.submission.activityType === activityType &&
-    answer.canonical.objectId === canonical.objectId &&
-    (await proveCanonical(answer.canonical, proof)) &&
-    (await proveReceipt(answer.action, answer.canonical, proof, evidenceHash));
-  return proven
-    ? {
-        ok: true,
-        journal: settled(journal, operationId, "registered"),
-        submission: submissionView(entry, "submitted"),
-      }
-    : {
-        ok: true,
-        journal,
-        submission: submissionView(entry, "unconfirmed"),
+  // Issued, settled or lapsed: authority already left, or never will.
+  if (!preparedLoyaltyStep(entry)) {
+    return fail("operation_already_submitted", 409);
+  }
+  const { input, requestHash } = submitRequest(
+    rules,
+    operationId,
+    entry.objectId,
+    type,
+    evidence,
+  );
+  // Exactly the request the member confirmed: same evidence, type, target.
+  if (
+    entry.evidenceHash !== evidenceHash ||
+    entry.activityType !== type ||
+    entry.requestHash !== requestHash
+  ) {
+    return fail("operation_conflict", 409);
+  }
+  // Past its window it is never minted, so its latest possible assertion
+  // stays bounded (§6); it is read back like any other, never sent.
+  if (Date.now() - entry.createdAt > LOYALTY_DISPATCH_WINDOW_MS) {
+    return fail("submission_window_closed", 409);
+  }
+  if (
+    ownSubmissions(context).some(
+      (item) =>
+        item.operationId !== operationId &&
+        unresolved(item) &&
+        item.evidenceHash === evidenceHash,
+    ) ||
+    // The same-instance double-submit damper (not idempotency, §6).
+    !claimIssue(
+      `${context.owner.sidHash}:${context.scope.launchId}:${operationId}`,
+      Date.now(),
+    )
+  ) {
+    return fail("submission_in_progress", 409);
+  }
+  const called = await call(
+    context,
+    context.journal,
+    rules,
+    LOYALTY_SUBMIT_OPERATION,
+    operationId,
+    entry.objectId,
+    input,
+    (minted) =>
+      applyIn(minted, {
+        kind: "issue",
+        operationId,
+        objectId: entry.objectId,
+        requestHash,
+      }),
+  );
+  // Nothing was dispatched by this request.
+  if (!called.ok) return bare(called.failure);
+  const journal = called.journal;
+  const view = submissionView({ operationId, activityType: type }, "unknown");
+  const unknown = { ok: true as const, journal, submission: view };
+  try {
+    if (!called.answer.reached) return unknown;
+    const answer = parseSubmitAnswer(called.answer.status, called.answer.body);
+    // Anything but an exact listed refusal (a runtime that already holds
+    // this operation answers operation_already_received) stays unknown.
+    if (answer.kind === "unknown") return unknown;
+    if (answer.kind === "refused") {
+      // Exact zero-write accounting for exactly this reason: nothing written.
+      return {
+        ...fail(answer.reason, 409),
+        journal: settled(journal, operationId, "not_submitted"),
       };
+    }
+    const proof = proofContext(context, rules);
+    const proven =
+      answer.submission.evidenceHash === evidenceHash &&
+      answer.submission.activityType === type &&
+      answer.canonical.objectId === entry.objectId &&
+      (await proveCanonical(answer.canonical, proof)) &&
+      (await proveReceipt(
+        answer.action,
+        answer.canonical,
+        proof,
+        evidenceHash,
+      ));
+    return proven
+      ? {
+          ok: true,
+          journal: settled(journal, operationId, "registered"),
+          submission: { ...view, status: "submitted" },
+        }
+      : { ok: true, journal, submission: { ...view, status: "unconfirmed" } };
+  } catch {
+    // Thrown after a possible dispatch: the issued journal still goes back.
+    return unknown;
+  }
+}
+
+/**
+ * The latest moment an assertion for this submission could have been
+ * minted: its recorded issue, else (prepared, its submit answer perhaps
+ * lost) the end of its dispatch window. Never the prepare time alone.
+ */
+const latestAssertion = (entry: FaceJournalEntry) =>
+  entry.issuedAt ?? entry.createdAt + LOYALTY_DISPATCH_WINDOW_MS;
+
+/** This launch's own entry, closed as never received; else unchanged. */
+function closeNotReceived(journal: FaceJournal, entry: FaceJournalEntry) {
+  if (!journal.entries.some((item) => item.operationId === entry.operationId)) {
+    return undefined;
+  }
+  if (preparedLoyaltyStep(entry)) {
+    const next = applyIn(journal, {
+      kind: "lapse",
+      operationId: entry.operationId,
+    });
+    return "entries" in next ? next : undefined;
+  }
+  const next = settled(journal, entry.operationId, "not_submitted");
+  return next === journal ? undefined : next;
 }
 
 /**
  * §4.5: the read-only status of exactly one of this wallet's own
- * submissions, under its original operation. Never resubmits.
+ * submissions (prepared or sent), under its original operation. Never
+ * resubmits. The journal is written only when this launch's own entry is
+ * closed by the read.
  */
 export async function submissionStatus(
   context: FaceRequestContext,
@@ -589,22 +751,22 @@ export async function submissionStatus(
     entry.objectId,
     {},
   );
-  if (!called.ok) return called.failure;
-  let journal = called.journal;
+  if (!called.ok) return bare(called.failure);
+  let journal: FaceJournal | undefined;
   const view = (status: LoyaltySubmissionStatus) => ({
     ok: true as const,
-    journal,
+    ...(journal ? { journal } : {}),
     submission: submissionView(entry, status),
   });
   if (!called.answer.reached) return view("unknown");
   const answer = parseStatusAnswer(called.answer.status, called.answer.body);
   if (answer.kind === "unknown") return view("unknown");
   if (answer.kind === "not_received") {
-    const expired =
-      entry.issuedAt !== undefined &&
-      Date.now() - entry.issuedAt > NOT_RECEIVED_AFTER_MS;
-    if (!expired) return view("unknown");
-    journal = settled(journal, entry.operationId, "not_submitted");
+    // Believed only once every assertion it could have had has expired.
+    if (Date.now() - latestAssertion(entry) <= NOT_RECEIVED_AFTER_MS) {
+      return view("unknown");
+    }
+    journal = closeNotReceived(called.journal, entry);
     return view("not_received");
   }
   const submissionProven =
@@ -620,7 +782,8 @@ export async function submissionStatus(
       entry.evidenceHash,
     ));
   if (!submissionProven) return view("unconfirmed");
-  journal = settled(journal, entry.operationId, "registered");
+  const registered = settled(called.journal, entry.operationId, "registered");
+  if (registered !== called.journal) journal = registered;
   if (answer.kind === "submitted") return view("submitted");
   const counted =
     verificationFollows(answer.action, answer.verification) &&

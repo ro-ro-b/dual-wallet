@@ -177,7 +177,7 @@ test("a lost submission reply is unknown, never resent, and read back after a re
     .fill("Workshop sign-in 0042");
   await page.getByRole("button", { name: "Submit activity" }).click();
   await expect(
-    page.getByText(/Sent, but its outcome isn't confirmed yet/),
+    page.getByText(/may have been sent, but its outcome isn't confirmed yet/),
   ).toBeVisible();
   // The same evidence again is refused by the wallet; nothing is sent.
   await page
@@ -197,6 +197,107 @@ test("a lost submission reply is unknown, never resent, and read back after a re
     page.getByText("Submitted. Waiting for the programme to verify it."),
   ).toBeVisible();
   expect((await counts())["loyalty.activity.submit"]).toBe(1);
+  expect(problems).toEqual([]);
+});
+
+const received = async () =>
+  (await post(runtimeOrigin, "/__test__/received")) as Array<{
+    operation: string;
+    operationId: string;
+  }>;
+const idsOf = (
+  list: Array<{ operation: string; operationId: string }>,
+  operation: string,
+) =>
+  list
+    .filter((item) => item.operation === operation)
+    .map((item) => item.operationId);
+
+test("a wallet answer lost whole after the write (Set-Cookie included): the old cookies still find the original operation, read back only", async ({
+  page,
+  context,
+}) => {
+  const problems = watch(page);
+  await activeMember(page);
+  const loyaltyRoute = `**/api/faces/${LOYALTY_SLUG}/loyalty`;
+  let jarAsSent: Awaited<ReturnType<typeof context.cookies>> | undefined;
+  await page.route(loyaltyRoute, async (route) => {
+    const body = route.request().postDataJSON() as { transition?: string };
+    if (body?.transition !== "submit") return route.continue();
+    // The browser's cookie jar exactly as this request left it.
+    jarAsSent = await context.cookies();
+    // The wallet BFF runs it to the end (the runtime writes once)...
+    await route.fetch();
+    // ...and its ENTIRE answer, Set-Cookie included, never reaches the browser.
+    await route.abort("connectionreset");
+  });
+  await page
+    .getByRole("textbox", { name: "What you did" })
+    .fill("Workshop sign-in 0042");
+  await page.getByRole("button", { name: "Submit activity" }).click();
+  await expect
+    .poll(async () => (await counts())["loyalty.activity.submit"])
+    .toBe(1);
+  const [original] = idsOf(await received(), "loyalty.activity.submit");
+  // Shown at once as sent with an unknown outcome, never "nothing recorded".
+  await expect
+    .soft(
+      page.getByText(/may have been sent, but its outcome isn't confirmed yet/),
+    )
+    .toBeVisible();
+  await expect.soft(page.getByText(/Nothing new was recorded/)).toHaveCount(0);
+
+  // Reloaded with exactly the cookies the browser had: nothing of the lost
+  // answer survives, whatever route.fetch did with its Set-Cookie.
+  await page.unroute(loyaltyRoute);
+  expect(jarAsSent).toBeDefined();
+  await context.clearCookies();
+  await context.addCookies(jarAsSent!);
+  await page.reload();
+  // The original operation is found, and only ever read back.
+  await expect(page.getByText("Not checked on this page yet.")).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "What you did" })
+    .fill("Workshop sign-in 0042");
+  await page.getByRole("button", { name: "Submit activity" }).click();
+  await expect(
+    page.getByText("This activity was already sent. Check its status instead."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Check status" }).click();
+  await expect(
+    page.getByText("Submitted. Waiting for the programme to verify it."),
+  ).toBeVisible();
+  const after = await received();
+  // One write, under its original id; every status read named that same id.
+  expect(idsOf(after, "loyalty.activity.submit")).toEqual([original]);
+  expect(idsOf(after, "loyalty.activity.status")).toEqual([original]);
+  expect(problems).toEqual([]);
+});
+
+test("a double click prepares once and sends that one operation once", async ({
+  page,
+}) => {
+  const problems = watch(page);
+  await activeMember(page);
+  const steps: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith(`/api/faces/${LOYALTY_SLUG}/loyalty`)) {
+      const body = request.postDataJSON() as { transition?: string };
+      if (body?.transition === "prepare" || body?.transition === "submit") {
+        steps.push(body.transition);
+      }
+    }
+  });
+  await page
+    .getByRole("textbox", { name: "What you did" })
+    .fill("Workshop sign-in 0042");
+  await page.getByRole("button", { name: "Submit activity" }).dblclick();
+  await expect(
+    page.getByText("Submitted. Waiting for the programme to verify it."),
+  ).toHaveCount(1);
+  await page.waitForLoadState("networkidle");
+  expect(steps).toEqual(["prepare", "submit"]);
+  expect(idsOf(await received(), "loyalty.activity.submit")).toHaveLength(1);
   expect(problems).toEqual([]);
 });
 

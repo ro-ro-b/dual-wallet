@@ -58,6 +58,8 @@ function reset() {
     pass: false,
     submissions: new Map(),
     counts: {},
+    /** Every operation this runtime received, in order, by its id. */
+    received: [],
     mode: { loseSubmit: false },
   };
 }
@@ -177,6 +179,10 @@ const lifecycle = (semantic, eventId, lifecycleState) => ({
 
 async function operate(body, claims) {
   state.counts[body.operation] = (state.counts[body.operation] || 0) + 1;
+  state.received.push({
+    operation: body.operation,
+    operationId: body.operationId,
+  });
   const input = body.input || {};
   switch (body.operation) {
     case "loyalty.programme.read":
@@ -302,6 +308,18 @@ async function operate(body, claims) {
       ];
     }
     case "loyalty.activity.submit": {
+      // Idempotent by operationId, looked up before every other check: an
+      // operation it already holds is never refused or written again.
+      if (state.submissions.has(body.operationId)) {
+        return [
+          409,
+          {
+            ok: false,
+            status: "operation_already_received",
+            accounting: zero("operation_already_received"),
+          },
+        ];
+      }
       if (
         !state.pass ||
         state.holder !== claims.holder ||
@@ -491,6 +509,8 @@ createServer(async (request, response) => {
         return json(response, 200, state.mode);
       case "/__test__/counts":
         return json(response, 200, state.counts);
+      case "/__test__/received":
+        return json(response, 200, state.received);
       case "/__test__/reset":
         reset();
         return json(response, 200, { ok: true });

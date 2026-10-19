@@ -1,7 +1,9 @@
 import {
   applyJournalTransition,
   journalOperationStatus,
+  loyaltySubmission,
   parseJournalEntry,
+  preparedLoyaltyStep,
   pruneJournal,
   recoverableRegistration,
   REGISTRATION_CLOSE_AFTER_MS,
@@ -726,5 +728,105 @@ describe("a runtime write named by the runtime's durable discovery", () => {
         1_000,
       ),
     ).toEqual({ ok: false, error: "unknown_operation" });
+  });
+});
+
+describe("a prepared Loyalty submission (loyalty-join-earn-v1 §6)", () => {
+  const HASH = `sha256:${"b".repeat(64)}`;
+  const loyalty = {
+    operationId: "loy-0123456789abcdef01234567",
+    kind: "loyalty" as const,
+    operation: "loyalty.activity.submit",
+    slug: "morrow-home",
+    programmeId: "morrow-home-arc",
+    objectId: OBJECT,
+    evidenceHash: `sha256:${"e".repeat(64)}`,
+    activityType: "workshop",
+    requestHash: HASH,
+  };
+  const prepared = () =>
+    run([
+      { kind: "begin", entry: loyalty },
+      { kind: "confirm", operationId: loyalty.operationId, objectId: OBJECT },
+    ]);
+
+  it("is possibly sent: listed, unknown, and never cancelled", () => {
+    const [entry] = prepared();
+    expect(preparedLoyaltyStep(entry)).toBe(true);
+    expect(loyaltySubmission(entry)).toBe(true);
+    expect(journalOperationStatus(entry, undefined)).toBe("outcome_unknown");
+    expect(
+      applyJournalTransition(
+        prepared(),
+        { kind: "cancel", operationId: loyalty.operationId },
+        2_000,
+      ),
+    ).toEqual({ ok: false, error: "operation_conflict" });
+  });
+
+  it("is issued only with exactly the request hash bound at prepare", () => {
+    expect(
+      applyJournalTransition(
+        prepared(),
+        {
+          kind: "issue",
+          operationId: loyalty.operationId,
+          objectId: OBJECT,
+          requestHash: `sha256:${"c".repeat(64)}`,
+        },
+        2_000,
+      ),
+    ).toEqual({ ok: false, error: "operation_conflict" });
+    const issued = applyJournalTransition(
+      prepared(),
+      {
+        kind: "issue",
+        operationId: loyalty.operationId,
+        objectId: OBJECT,
+        requestHash: HASH,
+      },
+      2_000,
+    );
+    expect(issued.ok && issued.entry).toMatchObject({
+      phase: "assertion_issued",
+      issuedAt: 2_000,
+    });
+  });
+
+  it("lapses only from prepared, as never sent", () => {
+    const lapsed = applyJournalTransition(
+      prepared(),
+      { kind: "lapse", operationId: loyalty.operationId },
+      2_000,
+    );
+    expect(lapsed.ok && lapsed.entry).toMatchObject({
+      phase: "cancelled",
+      status: "not_submitted",
+    });
+    const issued = run([
+      { kind: "begin", entry: loyalty },
+      { kind: "confirm", operationId: loyalty.operationId, objectId: OBJECT },
+      {
+        kind: "issue",
+        operationId: loyalty.operationId,
+        objectId: OBJECT,
+        requestHash: HASH,
+      },
+    ]);
+    expect(
+      applyJournalTransition(
+        issued,
+        { kind: "lapse", operationId: loyalty.operationId },
+        2_000,
+      ),
+    ).toEqual({ ok: false, error: "operation_conflict" });
+  });
+
+  it("is never read back without its request hash", () => {
+    const [entry] = prepared();
+    expect(parseJournalEntry(entry)).toEqual(entry);
+    expect(parseJournalEntry({ ...entry, requestHash: undefined })).toBe(
+      undefined,
+    );
   });
 });

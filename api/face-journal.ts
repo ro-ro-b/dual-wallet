@@ -7,6 +7,8 @@ import {
   parseJournalEntry,
   pruneJournal,
   recoverableRegistration,
+  loyaltySubmission,
+  preparedLoyaltyStep,
   sentAdmissionStep,
   sentLoyaltyStep,
   sentTransferStep,
@@ -321,16 +323,17 @@ export function readFaceAdmissionHistory(
 }
 
 /**
- * loyalty-join-earn-v1: activity submissions in this browser's OTHER launch
- * journals of this same wallet, face and programme (a reload or a sign-in
- * since). Read only to follow their original operation; never rewritten.
+ * loyalty-join-earn-v1: activity submissions, prepared or sent, in this
+ * browser's OTHER launch journals of this same wallet, face and programme (a
+ * reload or a sign-in since). Read only to follow their original operation;
+ * never rewritten, and never dispatched from here.
  */
 export function readFaceLoyaltyHistory(
   request: NextRequest,
   scope: FaceJournalScope,
   now = Date.now(),
 ): FaceJournalEntry[] {
-  return historyEntries(request, scope, now).filter(sentLoyaltyStep);
+  return historyEntries(request, scope, now).filter(loyaltySubmission);
 }
 
 export function readFaceTransferHistory(
@@ -411,8 +414,10 @@ function signedEvidence(entry: FaceJournalEntry) {
     sentTransferStep(entry) ||
     // P4.3: an admission step that left the wallet, outcome not yet read.
     sentAdmissionStep(entry) ||
-    // Loyalty: a submission whose assertion left, outcome not yet proven.
-    (sentLoyaltyStep(entry) && entry.phase === "assertion_issued")
+    // Loyalty: a submission whose assertion left, outcome not yet proven, or
+    // one prepared whose submit may have been sent (its answer lost whole).
+    (sentLoyaltyStep(entry) && entry.phase === "assertion_issued") ||
+    preparedLoyaltyStep(entry)
   );
 }
 

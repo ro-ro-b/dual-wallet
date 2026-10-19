@@ -265,8 +265,10 @@ is the transfer journey's and is refused on a host without it.
   that request, from the runtime's authenticated exact canonical read and
   action receipts, re-checked against the provider's public object, action
   log and history and the holder's own pass. No points, tiers or rejections
-  are shown. The full contract, its proof rules and its live release
-  blockers are in [loyalty-join-earn-v1](./proposals/loyalty-join-earn-v1.md).
+  are shown. A submission is journalled in the browser (`prepare`) before
+  its one `submit` can leave, so even a submit answer lost whole is found
+  again and only read back. The full contract, its proof rules and its live
+  release blockers are in [loyalty-join-earn-v1](./proposals/loyalty-join-earn-v1.md).
 
 ### Enforcement is on the server
 

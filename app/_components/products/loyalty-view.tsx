@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Alert } from "@/app/_components/design-system/alert";
 import { Button } from "@/app/_components/design-system/button";
@@ -32,8 +32,9 @@ import {
 
 // loyalty-join-earn-v1 on the wallet's native Loyalty page. Every state shown
 // was proven by the BFF from fresh reads; a join and a submission happen only
-// on the member's own action, and a sent submission is only ever checked
-// again under its original operation, never sent twice. No points, tiers or
+// on the member's own action, and a submission that may have been sent (its
+// answer lost, even whole) is only ever checked again under its original
+// operation, never sent twice. No points, tiers or
 // rejections are shown: the programme verifies, and until it does an
 // activity is waiting.
 
@@ -186,6 +187,12 @@ function ActivityForm({
   );
   const [evidence, setEvidence] = useState("");
   const [step, setStep] = useState<SubmitStep>({ kind: "editing" });
+  // Synchronous, and held until the answer's render commits: a second click
+  // (a double click, a stale handler) starts nothing.
+  const sending = useRef(false);
+  useEffect(() => {
+    if (step.kind === "editing") sending.current = false;
+  }, [step]);
   const activity = programme.activities.find(
     (item) => item.activityType === activityType,
   );
@@ -193,21 +200,26 @@ function ActivityForm({
     return <p role="status">{t("noActivities")}</p>;
   }
   async function submit() {
-    if (step.kind === "sending") return;
+    if (sending.current) return;
     const evidenceRef = evidence.trim();
     if (!evidenceRef || evidenceRef.length > EVIDENCE_MAX) {
       setStep({ kind: "editing", error: "evidence_required" });
       return;
     }
+    sending.current = true;
     setStep({ kind: "sending" });
-    try {
-      const submission = await submitActivity(where, activityType, evidenceRef);
-      setEvidence("");
-      setStep({ kind: "editing" });
-      onSubmitted(submission);
-    } catch (error) {
-      setStep({ kind: "editing", error: failureOf(error) });
+    const outcome = await submitActivity(where, activityType, evidenceRef);
+    if (outcome.kind !== "sent") {
+      setStep({
+        kind: "editing",
+        error: FAILURES.includes(outcome.code) ? outcome.code : "unavailable",
+      });
+      return;
     }
+    // Sent or possibly sent: listed under its own operation from now on.
+    setEvidence("");
+    setStep({ kind: "editing" });
+    onSubmitted(outcome.submission);
   }
   return (
     <form

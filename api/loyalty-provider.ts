@@ -15,7 +15,6 @@ import type {
 // Each answer is projected to exactly the facts a proof compares; anything
 // missing or ambiguous is `undefined` (unproven), never a guess.
 
-const PASS_PAGE = 25;
 const lowerAddress = (value: unknown) =>
   typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value)
     ? value.toLowerCase()
@@ -139,12 +138,16 @@ export async function firstStateChange(
 }
 
 export type OwnPassRead =
+  /** An exact answer: the holder holds exactly this pass, or none such. */
   | { ok: true; pass: OwnedObjectFacts | undefined }
-  | { ok: false; code: "session_expired" };
+  | { ok: false; code: "session_expired" | "unavailable" };
 
 /**
- * The holder's own pass, by the session's own credential: listed by owner
- * and the bound pass template, then exactly the runtime-named object.
+ * The holder's own pass, by the session's own credential: exactly the
+ * runtime-named object id, together with owner = holder and the bound pass
+ * template, so no inventory page can hide it. Only an exact empty answer
+ * (or the id not found) says the holder does not hold it yet; a refused,
+ * failed, malformed or ambiguous read says nothing about absence.
  */
 export async function ownPass(
   accessToken: string,
@@ -152,30 +155,51 @@ export async function ownPass(
   passTemplateId: string,
   passObjectId: string,
 ): Promise<OwnPassRead> {
+  let objects: unknown;
   try {
     const result = await getObjectsApi(accessToken).listObjects(
-      { owner: holder, templateId: passTemplateId, limit: PASS_PAGE },
+      {
+        id: passObjectId,
+        owner: holder,
+        templateId: passTemplateId,
+        limit: 2,
+      },
       { cache: "no-store" },
     );
-    const object = result.objects.find((item) => item.id === passObjectId);
-    const owner = object ? lowerAddress(object.owner) : undefined;
-    return {
-      ok: true,
-      pass:
-        object && owner
-          ? {
-              id: object.id,
-              templateId: object.templateId,
-              owner,
-              orgId: object.orgId,
-              custom: record(object.custom) ? object.custom : {},
-            }
-          : undefined,
-    };
+    objects = (result as { objects?: unknown } | undefined)?.objects;
   } catch (error) {
     if (error instanceof ResponseError && error.response.status === 401) {
       return { ok: false, code: "session_expired" };
     }
-    return { ok: true, pass: undefined };
+    if (error instanceof ResponseError && error.response.status === 404) {
+      return { ok: true, pass: undefined };
+    }
+    return { ok: false, code: "unavailable" };
   }
+  if (!Array.isArray(objects) || objects.length > 1) {
+    return { ok: false, code: "unavailable" };
+  }
+  if (!objects.length) return { ok: true, pass: undefined };
+  const [object] = objects as Array<Record<string, unknown>>;
+  const owner = record(object) ? lowerAddress(object.owner) : undefined;
+  // Exactly the object asked for, or the read proves nothing.
+  if (
+    !record(object) ||
+    object.id !== passObjectId ||
+    object.templateId !== passTemplateId ||
+    !owner ||
+    owner !== holder.toLowerCase()
+  ) {
+    return { ok: false, code: "unavailable" };
+  }
+  return {
+    ok: true,
+    pass: {
+      id: object.id,
+      templateId: object.templateId,
+      owner,
+      orgId: typeof object.orgId === "string" ? object.orgId : "",
+      custom: record(object.custom) ? object.custom : {},
+    },
+  };
 }

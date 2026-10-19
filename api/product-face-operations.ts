@@ -126,7 +126,7 @@ const ACTION_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 // one-time jti, its settle dispatch claim, its unit-level registration single
 // flight and its per-version quote decisions do.
 const issuing = new Map<string, number>();
-function claimIssue(key: string, now: number) {
+export function claimIssue(key: string, now: number) {
   for (const [candidate, until] of issuing) {
     if (until <= now) issuing.delete(candidate);
   }

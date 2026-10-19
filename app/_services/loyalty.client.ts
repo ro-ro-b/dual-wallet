@@ -205,6 +205,26 @@ export async function readMembership(
   };
 }
 
+/**
+ * One launch's journal-writing steps (prepare, submit, status), one at a
+ * time: each answer's journal cookie then always builds on the one before,
+ * so no slower answer can overwrite a newer prepared submission.
+ */
+const queues = new Map<string, Promise<unknown>>();
+function serial<T>(where: Where, step: () => Promise<T>): Promise<T> {
+  const key = `${where.slug} ${where.launchId}`;
+  const run = (queues.get(key) ?? Promise.resolve()).then(step, step);
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(key, settled);
+  void settled.then(() => {
+    if (queues.get(key) === settled) queues.delete(key);
+  });
+  return run;
+}
+
 async function submissionAnswer(
   where: Where,
   body: Record<string, unknown>,
@@ -216,23 +236,79 @@ async function submissionAnswer(
   return answer.submission;
 }
 
-/** One activity submission; journalled by the BFF before it leaves. */
+/** The runtime's own zero-write refusals of a sent submission. */
+const REFUSALS = [
+  "loyalty_activity_evidence_duplicate",
+  "loyalty_activity_type_unknown",
+  "membership_not_active",
+];
+
+export type SubmitOutcome =
+  /** Prepare failed or was refused: nothing was sent. */
+  | { kind: "not_sent"; code: string }
+  /** Sent, and the runtime refused it with zero writes: nothing recorded. */
+  | { kind: "refused"; code: string }
+  /** Sent, or possibly sent: shown under its original operation only. */
+  | { kind: "sent"; submission: LoyaltySubmissionView };
+
+/**
+ * One activity submission: `prepare` (journalled and returned to this
+ * browser, nothing sent), then exactly one `submit` of that operation. Any
+ * failure after the prepare leaves it possibly sent: it is shown as unknown
+ * under its original id and never sent again.
+ */
 export function submitActivity(
   where: Where,
   activityType: string,
   evidenceRef: string,
-) {
-  return submissionAnswer(where, {
-    transition: "submit",
-    activity_type: activityType,
-    evidence_ref: evidenceRef,
+): Promise<SubmitOutcome> {
+  return serial(where, async () => {
+    let operationId: string;
+    try {
+      const prepared = await loyaltyRequest(where, {
+        transition: "prepare",
+        activity_type: activityType,
+        evidence_ref: evidenceRef,
+      });
+      const value = record(prepared.prepared) ? prepared.prepared : {};
+      if (!isOperationId(value.operationId)) {
+        throw new LoyaltyError("unavailable");
+      }
+      operationId = value.operationId;
+    } catch (error) {
+      return {
+        kind: "not_sent",
+        code: error instanceof LoyaltyError ? error.code : "unavailable",
+      };
+    }
+    try {
+      return {
+        kind: "sent",
+        submission: await submissionAnswer(where, {
+          transition: "submit",
+          operation_id: operationId,
+          activity_type: activityType,
+          evidence_ref: evidenceRef,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof LoyaltyError && REFUSALS.includes(error.code)) {
+        return { kind: "refused", code: error.code };
+      }
+      return {
+        kind: "sent",
+        submission: { operationId, activityType, status: "unknown" },
+      };
+    }
   });
 }
 
 /** Read-only status of one of this wallet's own submissions. Never resends. */
 export function submissionStatus(where: Where, operationId: string) {
-  return submissionAnswer(where, {
-    transition: "status",
-    operation_id: operationId,
-  });
+  return serial(where, () =>
+    submissionAnswer(where, {
+      transition: "status",
+      operation_id: operationId,
+    }),
+  );
 }

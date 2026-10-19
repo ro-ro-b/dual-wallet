@@ -95,7 +95,8 @@ ActionReceipt   = {   // one Dual action, from the runtime's retained write
   "account": Addr,              // signer, from the runtime's fresh action-log read
   "next_nonce": int>=1,         // the object's nonce after this action
   "readback_content_hash": string,  // content hash read back after the write
-  "written_custom": { ...the exact custom map this action wrote... },
+  "written_custom": { ...the object's FULL custom map as this action left it
+                      at next_nonce (not a partial patch)... },
   "written_custom_hash": Hash } // over canonical JSON of written_custom
 ```
 
@@ -180,10 +181,19 @@ never a Dual fact.
 existing `submit_activity` as role member, with its duplicate-evidence check
 (`src/loyalty-record-runtime.mjs:329-339`).
 
+**Idempotent by `operationId`.** The runtime looks the operation id up
+before every other check. For an operation it already holds (accepted,
+applied or still in flight) it writes nothing and answers 409
+`operation_already_received`; the wallet treats that as `outcome_unknown`
+and reads `loyalty.activity.status`. Every other refusal below is only ever
+about an operation the runtime does not hold, so it means this operation
+wrote nothing and never will.
+
 | HTTP | `status`                                                                                        | Body                                                                                                                                       |
 | ---- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | 200  | `activity_submitted`                                                                            | `submission {evidence_hash, activity_type, submitted_at}`, `canonical`, `action` (submit_activity), `accounting {1, "activity_submitted"}` |
 | 409  | `loyalty_activity_evidence_duplicate`, `loyalty_activity_type_unknown`, `membership_not_active` | `accounting {0, <status>}`                                                                                                                 |
+| 409  | `operation_already_received`                                                                    | `accounting {0, "operation_already_received"}`: not a refusal of the operation; the wallet keeps it unknown                                |
 | 202  | `outcome_unknown`                                                                               | `accounting {"unknown", "outcome_unknown"}`                                                                                                |
 
 `evidence_hash` = `sha256:` + hex sha256 of the exact `evidence_ref` (the
@@ -250,11 +260,26 @@ wallet id in participant custody: `api/purpose-runtime.mjs:1114-1121`,
    `action_id`, `next_nonce` = R's, `next_content_hash` =
    `readback_content_hash`, and `current_owner` = the issuer. C's `nonce` is
    at least R's `next_nonce`.
+5. **Current or historical.** If R's `next_nonce` = C's `nonce`, R is C's
+   current state: `written_custom` must equal C's fresh `custom` exactly
+   (canonical JSON, every key) and `readback_content_hash` must equal C's
+   `content_hash`. A retained map with a recomputed hash proves nothing by
+   itself; with genuine action, signer, state change, nonce and hash, a
+   receipt whose map says `Activity pending` or `Activity verified` while C
+   says `Member` at that nonce is refused. If R's `next_nonce` < C's
+   `nonce`, R is historical: provider-tied by (3) and (4) only (action,
+   signer, nonce, content hash), its retained map the runtime's record (the
+   provider publishes no custom history). The opening receipt is usually
+   historical, a submission is current when first proven, and a
+   verification is current when counted.
 
 **Active.** C and the opening receipt pass, and the holder's own session
-lists the pass (`listObjects` with `owner` = holder and
-`templateId` = `passTemplateId`). The pass's object id is the runtime's, and
-its custom has:
+reads exactly the runtime-named pass: `GET /objects?id=<pass object id>&owner=<holder>&template_id=<passTemplateId>`,
+never an inventory page. The answer must be exactly that object id, owned
+by the holder, from that template. Only an exact empty answer or a 404 means
+the pass is not held yet (`pending_pass`); a 401 is an expired session; a
+403, a 5xx, a network failure, or a malformed, ambiguous or mismatched answer
+is `unconfirmed` and claims no absence. The pass's custom has:
 
 - `schema` = `participant-opening-pass-v1`;
 - `product_type` = `participant_opening_pass`;
@@ -268,9 +293,9 @@ log) must be by the issuer, to the holder, from `passTemplateId`. A canonical
 membership without such a pass is `pending_pass`, not active.
 
 **Submitted.** The submission's receipt passes (2) with the wallet's own
-evidence hash, plus (1), (3) and (4).
+evidence hash, plus (1), (3), (4) and (5).
 
-**Counted.** `verified`, with both receipts passing. The verification's
+**Counted.** `verified`, with both receipts passing (1)–(5). The verification's
 `next_nonce` must be exactly the submission's `next_nonce` + 1: the
 very next change to the canonical object. Studio cannot run another
 `submit_activity` from `Activity pending` (`src/domain-packs.mjs:228`), so
@@ -283,20 +308,53 @@ never shown as progress.
 
 ## 6. Recovery
 
-- A submit is journalled (kind `loyalty`, the launch cookie) before dispatch:
-  operation id, canonical object id, activity type, evidence hash and request
-  hash; never the evidence text.
-- A lost reply, a 5xx, an unavailable runtime or an expired session after
-  that point is `outcome_unknown` under the original operation. The wallet
-  only reads `loyalty.activity.status` for that id, across reloads and new
-  sign-ins of the same wallet (another launch's journal is read too). It
-  never resubmits.
-- A new submission with the same evidence hash is refused while an earlier
-  one is unresolved.
-- `not_received` is accepted only after the original assertion expired
-  (issued more than 120 s earlier); before then it stays unknown.
-- Join is not journalled: it writes nothing to Dual and is idempotent by
-  `operationId`. Its outcome is read back with `loyalty.membership.read`.
+A submission is two wallet requests, so its record is in the browser before
+anything can be sent:
+
+1. **`prepare`** (activity type and evidence). The wallet re-proves the
+   membership active (§5, fresh reads), allots the operation id and
+   journals it in the launch's sealed cookie (kind `loyalty`, phase
+   `confirmed`): operation id, canonical object id, activity type, evidence
+   hash and the exact `request_hash`, never the evidence text. Its answer,
+   with that Set-Cookie, names the operation id. Nothing is sent.
+2. **`submit`** (that operation id, the same activity type and evidence).
+   Only for this launch's own prepared entry, with exactly its request hash,
+   within 30 s of `prepare` (else `submission_window_closed`; nothing is
+   minted). It mints, journals the issue and dispatches once.
+
+Then:
+
+- **A lost submit answer, even lost whole.** The browser still holds the
+  prepared journal. A prepared entry counts as possibly sent: it is listed,
+  never dropped by the cookie budget, never cancelled, and only read back
+  with `loyalty.activity.status` under its original id, across reloads and
+  new sign-ins of the same wallet (other launches' journals are read too).
+  No other launch submits it, and the page never resubmits it.
+- **After the dispatch.** A lost runtime reply, a 5xx, an unavailable
+  runtime, an unprovable answer or a thrown error is `outcome_unknown` (or
+  unconfirmed), with the issued journal.
+- **`not_received`.** Believed only once every assertion the operation could
+  have had has expired: 120 s (60 s assertion lifetime plus skew) after its
+  recorded issue; for a prepared entry whose issue the browser never
+  learned, 120 s after the end of its 30 s window. The prepare time alone
+  never proves a later assertion expired. A prepared entry then lapses.
+- **Same evidence.** A new `prepare` with the same evidence hash is refused
+  (`submission_in_progress`) while an earlier one is unresolved (prepared,
+  or issued and not proven).
+- **No lost update.** Reads and the join write no launch journal: a slower
+  read's cookie could otherwise overwrite a newer prepared one. The page
+  runs `prepare`, `submit` and `status` one at a time per launch, and a
+  double click starts one submission.
+- **Boundary.** A sealed cookie cannot serialise two requests that carry
+  the same copy of it. The wallet's existing same-instance damper refuses a
+  second `submit` of one operation for 10 minutes. Past it (another server
+  instance), only a deliberate replay of the stale prepared cookie within
+  its 30 s window can dispatch the same operation again: the same id and
+  request hash, never a new id. The runtime's idempotency by `operationId`
+  (§4.4) then writes nothing and the wallet keeps it unknown. The normal
+  page never sends it.
+- **Join** is not journalled: it writes nothing to Dual and is idempotent
+  by `operationId`. Its outcome is read back with `loyalty.membership.read`.
 
 ## 7. Wallet configuration
 
@@ -316,7 +374,9 @@ never shown as progress.
   - `/products/<slug>/loyalty`: programme, consent, membership and this
     wallet's own submissions.
   - `POST /api/faces/<slug>/loyalty`, with `transition` = `programme`, `join`,
-    `membership`, `submit` or `status`.
+    `membership`, `prepare`, `submit` or `status` (§6). Only `prepare`,
+    `submit` and a `status` that closes this launch's own entry carry the
+    launch journal back.
   - A Today-first Home membership card.
   - No iframe.
 
@@ -328,7 +388,9 @@ never shown as progress.
 2. The live canonical template body and one real Loyalty write's full map:
    the root fields, `proof_event.public_fields` order and length (the
    evidence hash must survive the existing 12-entry cut), `lifecycle`; and
-   whether `update` replaces or merges `custom`.
+   whether `update` replaces or merges `custom`. Under merge the runtime
+   must still return the full resulting map as `written_custom`, or every
+   current receipt fails closed under §5 (5).
 3. The participant-custody canary incompatibility
    (`test/participant-opening-canary-incompatibility.test.mjs`).
 4. Recipient identity: the pass recipient and `memberId` bound to the
@@ -344,7 +406,10 @@ never shown as progress.
    - the holder session's `listObjects` by pass template.
 6. `opening_action_id` is the Dual action-log id of the canonical mint (the
    pass snapshot's `canonicalOpeningActionId`).
-7. Physical fulfilment, benefits and redemption: out of scope.
+7. The runtime's idempotency by `operationId` for submit (§4.4,
+   `operation_already_received` before every other check), proven by Studio
+   tests: the wallet relies on it only past its own same-instance damper.
+8. Physical fulfilment, benefits and redemption: out of scope.
 
 ## 9. Wallet implementation (source only)
 
@@ -368,11 +433,22 @@ never shown as progress.
     record, a distinct record reference and object id, duplicates, matching
     and non-adjacent verification, pending creation and pass, lost replies
     across reloads and sign-ins, `not_received` only after expiry, and legacy
-    bindings and hosts;
+    bindings and hosts. It also covers:
+    - a submit answer lost whole after the write (prepared journal only);
+    - a BFF failure after the write;
+    - concurrent submits and concurrent prepares;
+    - the dispatch window, and `not_received` bounded by the latest
+      possible assertion;
+    - forged current-nonce submission and verification maps;
+    - a named pass beyond the first page, and failed pass reads versus an
+      exact empty read;
+  - `api/loyalty-provider.test.ts`: the exact pass read;
   - `api/host-loyalty.test.ts`;
   - `app/_components/products/loyalty-view.test.tsx`.
 - Browser (FICTIONAL): `npx playwright test -c playwright.loyalty.config.ts`
-  (ports 3340, 4340 and 4350; `e2e/loyalty.spec.ts`). It runs the real
+  (ports 3340, 4340 and 4350; `e2e/loyalty.spec.ts`), including a submit
+  answer discarded whole (Set-Cookie too) and a reload with the browser's
+  old cookies, and a double click. It runs the real
   wallet against the fake api-v3 with a fictional provider world
   (`e2e/loyalty/world.mjs`, `MOCK_LOYALTY=1`) and a LOCAL FAKE runtime that
   verifies every assertion (`e2e/loyalty/fake-loyalty-runtime.mjs`). The fake
