@@ -500,7 +500,10 @@ test("signing out clears the private tickets", async ({ page }) => {
   ).toBeVisible();
   // Sign out from the wallet shell (the Tickets list page).
   await page.goto(LIST);
-  await expect(page.getByRole("link", { name: /Harbour Night/ })).toBeVisible();
+  // The ticket card, never the shell's "Harbour Nights home" brand link.
+  await expect(
+    page.getByRole("link", { name: /^Harbour Night\b/ }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL("/login");
   const seen = watch(page);
