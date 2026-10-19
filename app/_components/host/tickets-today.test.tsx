@@ -162,6 +162,37 @@ describe("the signed-in home's tickets", () => {
     ]);
   });
 
+  it("names a dated ticket's exact end state, and a closed entry window apart from its issued state", async () => {
+    ticketReplies = [
+      {
+        status: 200,
+        body: {
+          tickets: [
+            // Today in Sydney, cancelled as Dual records it.
+            wire("1", {
+              ...at("2026-10-18T11:30:00Z"),
+              status: "ended",
+              endedAs: "cancelled",
+            }),
+            // Today too: still issued, its verified entry window closed.
+            wire("2", {
+              ...at("2026-10-18T09:00:00Z"),
+              entryWindow: { endsAt: "2026-10-18T09:30:00Z", closed: true },
+            }),
+          ],
+          next: null,
+        },
+      },
+    ];
+    view();
+    const today = await screen.findByRole("region", { name: "Today" });
+    const [closed, cancelled] = within(today).getAllByRole("link");
+    expect(within(cancelled).getByText("Cancelled")).toBeTruthy();
+    expect(within(closed).getByText("Issued")).toBeTruthy();
+    expect(within(closed).getByText("Entry window closed")).toBeTruthy();
+    expect(screen.queryByText(/No longer valid|Expired/)).toBeNull();
+  });
+
   it("is reachable and readable from the keyboard, ticket by ticket", async () => {
     ticketReplies = [
       {

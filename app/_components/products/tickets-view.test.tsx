@@ -447,3 +447,134 @@ describe("one ticket with ticket-admission-v1", () => {
     ).toBeNull();
   });
 });
+
+describe("why a verified ticket can't be used", () => {
+  const ADMISSION = `/api/faces/morrow-home/tickets/${TICKET}/admission`;
+  const WINDOW_END = "2026-10-19T11:00:00.000Z";
+  let ticket: Record<string, unknown>;
+  let checked: unknown;
+  beforeEach(() => {
+    checked = { status: "none" };
+    fetchMock.mockImplementation((url: string) =>
+      url === ADMISSION ? json({ state: checked }) : json({ ticket }),
+    );
+  });
+  const header = () =>
+    screen.getByRole("heading", { level: 1, name: "Harbour Night" })
+      .parentElement!.parentElement!;
+  const open = async (admission = true) => {
+    view({ objectId: TICKET, admission });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+  };
+
+  it.each([
+    ["cancelled", "Cancelled", "Dual records this ticket as cancelled."],
+    ["expired", "Expired", "Dual records this ticket as expired."],
+  ])(
+    "names the exact end state, %s, with no reason and no new entry, while an entry already sent stays checkable",
+    async (endedAs, badge, explanation) => {
+      ticket = wire({ status: "ended", endedAs });
+      checked = {
+        status: "unknown",
+        operationId: "adm-0123456789abcdef01234567",
+      };
+      await open();
+      expect(within(header()).getByText(badge)).toBeTruthy();
+      expect(within(header()).getByText(new RegExp(explanation))).toBeTruthy();
+      expect(screen.queryByText("No longer valid")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Check for entry request" }),
+      ).toBeNull();
+      expect(screen.queryByText(/check for their request/)).toBeNull();
+      expect(screen.getByText(/No new entry can be confirmed/)).toBeTruthy();
+      // The original operation of an entry sent earlier is still read back.
+      await userEvent.click(
+        screen.getByRole("button", { name: "Check entry status" }),
+      );
+      expect(
+        await screen.findByText(/outcome is not confirmed yet/),
+      ).toBeTruthy();
+      expect(screen.queryByText("Entry confirmed")).toBeNull();
+    },
+  );
+
+  it("any other ended state stays 'No longer valid'; a state the rules don't place stays 'Not confirmed'", async () => {
+    ticket = wire({ status: "ended", endedAs: null });
+    const first = view({ objectId: TICKET });
+    expect(await screen.findByText("No longer valid")).toBeTruthy();
+    expect(screen.queryByText(/cancelled|expired/i)).toBeNull();
+    first.unmount();
+    ticket = wire({ status: "unconfirmed" });
+    view({ objectId: TICKET });
+    expect(await screen.findByText("Not confirmed")).toBeTruthy();
+    expect(screen.queryByText(/cancelled|expired|window/i)).toBeNull();
+  });
+
+  it("a still-issued ticket past its verified entry window says so apart from its unchanged state, and offers no new entry", async () => {
+    ticket = wire({
+      status: "issued",
+      entryWindow: { endsAt: WINDOW_END, closed: true },
+    });
+    await open();
+    expect(within(header()).getByText("Issued")).toBeTruthy();
+    expect(
+      screen.getByText(
+        `The entry window for this ticket closed on formatted:${WINDOW_END} (short zone). Dual still records it as issued, but it can no longer be used to get in.`,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/expired/i)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Check for entry request" }),
+    ).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Check entry status" }),
+    );
+    expect(await screen.findByText(/no entry request/)).toBeTruthy();
+    expect(screen.queryByText("Entry confirmed")).toBeNull();
+  });
+
+  it("an open window, or none the wallet could verify, changes nothing", async () => {
+    ticket = wire({
+      status: "issued",
+      entryWindow: { endsAt: WINDOW_END, closed: false },
+    });
+    const first = view({ objectId: TICKET, admission: true });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+    expect(screen.queryByText(/window/i)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Check for entry request" }),
+    ).toBeTruthy();
+    first.unmount();
+    // An older server's ticket, without the new keys.
+    ticket = wire({ status: "issued" });
+    view({ objectId: TICKET, admission: true });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+    expect(screen.queryByText(/window/i)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Check for entry request" }),
+    ).toBeTruthy();
+  });
+
+  it("the list names the end state and the closed window too", async () => {
+    fetchMock.mockImplementation(() =>
+      json({
+        tickets: [
+          wire({ status: "ended", endedAs: "cancelled" }),
+          wire({
+            objectId: "d".repeat(24),
+            status: "issued",
+            entryWindow: { endsAt: WINDOW_END, closed: true },
+          }),
+        ],
+        next: null,
+      }),
+    );
+    view();
+    const [cancelled, closed] = await screen.findAllByRole("link", {
+      name: /Harbour Night/,
+    });
+    expect(within(cancelled).getByText("Cancelled")).toBeTruthy();
+    expect(within(closed).getByText("Issued")).toBeTruthy();
+    expect(within(closed).getByText("Entry window closed")).toBeTruthy();
+  });
+});

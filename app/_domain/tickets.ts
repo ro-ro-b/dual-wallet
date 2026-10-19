@@ -65,6 +65,22 @@ export interface Ticket {
   entryClass: string | null;
   entryGuidance: string | null;
   /**
+   * Which canonical end state an `ended` ticket is in, only when the object's
+   * state is exactly Studio's `Cancelled` or `Expired` (cancel_ticket,
+   * expire_ticket) and the binding lists it as ended. Null for any other
+   * ended state and for every ticket that has not ended. It names the state
+   * Dual records, never a reason.
+   */
+  endedAs: "cancelled" | "expired" | null;
+  /**
+   * The entry window's end, read only for a ticket-admission-v1 binding from
+   * the exact closed ticket template (its `admissionWindowEndsAt`, the
+   * admission leg's own field), and whether it had passed at this read. A
+   * derived fact beside the canonical state, which it never changes: a
+   * closed window is not `Expired`. Null when the wallet cannot verify it.
+   */
+  entryWindow: { endsAt: string; closed: boolean } | null;
+  /**
    * No Dual state is ever read as entry, whatever the object says; with
    * ticket-admission-v1 entry comes only from the verified admission leg.
    */
@@ -149,6 +165,44 @@ function statusOf(
   return "unconfirmed";
 }
 
+/** Studio's two canonical ticket end states the wallet names. */
+const ENDED_AS: Readonly<Record<string, "cancelled" | "expired">> = {
+  Cancelled: "cancelled",
+  Expired: "expired",
+};
+
+function endedAsOf(state: unknown, status: TicketStatus) {
+  return status === "ended" &&
+    typeof state === "string" &&
+    Object.hasOwn(ENDED_AS, state)
+    ? ENDED_AS[state]
+    : null;
+}
+
+/**
+ * The verified entry window, or null. Only the admission contract fixes where
+ * the window's end is kept: the exact closed ticket template (no more, no
+ * fewer keys) and its `admissionWindowEndsAt`. P4.2 rules name no end, and a
+ * start time says nothing about it.
+ */
+function entryWindowOf(
+  custom: Record<string, unknown>,
+  rules: TicketRules,
+  now: number,
+): Ticket["entryWindow"] {
+  const keys = rules.admission ? [...rules.admission.customKeys].sort() : [];
+  const present = Object.keys(custom).sort();
+  if (
+    !keys.length ||
+    present.length !== keys.length ||
+    present.some((key, index) => key !== keys[index])
+  ) {
+    return null;
+  }
+  const endsAt = ticketTime(custom.admissionWindowEndsAt);
+  return endsAt ? { endsAt, closed: Date.parse(endsAt) <= now } : null;
+}
+
 /**
  * The read-only ticket for one object, or the reason the wallet refuses it.
  * The checks are the ones a holder-only view needs: the template belongs to
@@ -162,6 +216,8 @@ export function evaluateTicket(
     clientId: string;
     templateIds: readonly string[];
     rules: TicketRules;
+    /** The time of this read, for the derived entry window only. */
+    now?: number;
   },
 ): TicketEvaluation {
   if (!context.templateIds.includes(source.templateId)) {
@@ -180,6 +236,8 @@ export function evaluateTicket(
   const name = ticketText(source.name, 200) ?? source.objectId;
   const optional = (path: string | null) =>
     path === null ? null : valueAt(source.custom, path);
+  const state = valueAt(source.custom, fields.state);
+  const status = statusOf(state, issueOperationId, context.rules);
   return {
     ok: true,
     ticket: {
@@ -188,11 +246,7 @@ export function evaluateTicket(
       clientId: source.orgId.toLowerCase(),
       holder: context.holder,
       issueOperationId,
-      status: statusOf(
-        valueAt(source.custom, fields.state),
-        issueOperationId,
-        context.rules,
-      ),
+      status,
       name,
       event: {
         title:
@@ -203,6 +257,12 @@ export function evaluateTicket(
       },
       entryClass: ticketText(optional(fields.entryClass), 80),
       entryGuidance: ticketText(optional(fields.entryGuidance)),
+      endedAs: endedAsOf(state, status),
+      entryWindow: entryWindowOf(
+        source.custom,
+        context.rules,
+        context.now ?? Date.now(),
+      ),
       admission: "unavailable",
       modifiedAt: source.modifiedAt.toISOString(),
     },
@@ -284,6 +344,18 @@ export function parseTicket(value: unknown): Ticket | undefined {
   const entryClass = nullableText(value.entryClass, 80);
   const entryGuidance = nullableText(value.entryGuidance, MAX_TEXT);
   const issue = value.issueOperationId;
+  // Added later: an older server's ticket has neither key, read as null.
+  const endedAs = value.endedAs ?? null;
+  const window = value.entryWindow ?? null;
+  const entryWindow =
+    window === null
+      ? null
+      : record(window) &&
+          Object.keys(window).length === 2 &&
+          typeof window.closed === "boolean" &&
+          ticketTime(window.endsAt) !== null
+        ? { endsAt: window.endsAt as string, closed: window.closed }
+        : undefined;
   if (
     typeof value.objectId !== "string" ||
     !OBJECT_ID.test(value.objectId) ||
@@ -298,6 +370,12 @@ export function parseTicket(value: unknown): Ticket | undefined {
       (typeof issue === "string" && ISSUE_OPERATION.test(issue))
     ) ||
     !STATUSES.includes(value.status as TicketStatus) ||
+    !(
+      endedAs === null ||
+      ((endedAs === "cancelled" || endedAs === "expired") &&
+        value.status === "ended")
+    ) ||
+    entryWindow === undefined ||
     value.admission !== "unavailable" ||
     typeof value.modifiedAt !== "string" ||
     !Number.isFinite(Date.parse(value.modifiedAt)) ||
@@ -321,6 +399,8 @@ export function parseTicket(value: unknown): Ticket | undefined {
     event: { title, startsAt, venue },
     entryClass,
     entryGuidance,
+    endedAs,
+    entryWindow,
     admission: "unavailable",
     modifiedAt: value.modifiedAt,
   };

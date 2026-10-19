@@ -72,6 +72,7 @@ export function TicketAdmission({
   objectId,
   launchId,
   recorded,
+  noNewEntry = false,
   onOutcome,
 }: {
   slug: string;
@@ -79,6 +80,12 @@ export function TicketAdmission({
   launchId: string;
   /** Dual's own state already reads as the admission target. */
   recorded: boolean;
+  /**
+   * The ticket has ended, or its verified entry window has closed: no new
+   * entry is offered. Checking stays, so an entry already sent is still
+   * found and read back exactly as before.
+   */
+  noNewEntry?: boolean;
   /** Every settled admission state, so the page can read the ticket again. */
   onOutcome: (state: AdmissionState) => void;
 }) {
@@ -226,7 +233,7 @@ export function TicketAdmission({
 
   const checkButton = (
     <Button variant="secondary" onClick={() => void check()}>
-      {t("check")}
+      {t(noNewEntry ? "checkStatus" : "check")}
     </Button>
   );
 
@@ -235,7 +242,11 @@ export function TicketAdmission({
     case "idle":
       body = (
         <>
-          <p>{t(recorded ? "introRecorded" : "intro")}</p>
+          <p>
+            {t(
+              noNewEntry ? "introClosed" : recorded ? "introRecorded" : "intro",
+            )}
+          </p>
           {checkButton}
         </>
       );

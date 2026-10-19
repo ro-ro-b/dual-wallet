@@ -588,6 +588,30 @@ async function handleProgramme(request, response, url) {
       expireSessions: ticketSessionsExpired,
     });
   }
+  // Admission fixture only: a FICTIONAL change of the one closed-template
+  // ticket, standing in for a Studio operator's lifecycle write (the state
+  // and its admissionStatus mirror) or for time passing its entry window.
+  // Nothing else on the object changes. Local fake only.
+  if (
+    admissionFixture &&
+    method === "POST" &&
+    path === "/__test__/admission-ticket"
+  ) {
+    const body = await readBody(request);
+    const ticket = objects.get(ADMISSION_TICKET);
+    if (typeof body?.state === "string") {
+      ticket.custom.state = body.state;
+      ticket.custom.admissionStatus = body.state;
+    }
+    if (body?.windowClosed === true) {
+      const closed = Math.floor(Date.now() / 60_000) * 60_000 - 3_600_000;
+      ticket.custom.admissionWindowStartsAt = new Date(
+        closed - 3 * 3_600_000,
+      ).toISOString();
+      ticket.custom.admissionWindowEndsAt = new Date(closed).toISOString();
+    }
+    return respond(response, 200, { custom: ticket.custom });
+  }
   if (method === "POST" && path === "/__test__/mode") {
     const body = await readBody(request);
     loseExecuteResponses = Number(body?.loseExecuteResponses ?? 0) || 0;

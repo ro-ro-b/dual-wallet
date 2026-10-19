@@ -249,3 +249,175 @@ describe("the browser's read of a ticket", () => {
     expect(parseTicketPage({ tickets: "x", next: null })).toBeUndefined();
   });
 });
+
+describe("why a verified ticket can't be used", () => {
+  // Studio's own rules for its closed ticket template (P4.2), with and
+  // without ticket-admission-v1. FICTIONAL values throughout.
+  const admission = parseAdmissionRules({
+    contract: "ticket-admission-v1",
+    action: "update",
+    inputPath: "data.custom",
+    leaves: {
+      state: { enum: ["Admitted"] },
+      admissionStatus: { enum: ["Admitted"] },
+      operation_id: { runtimeIssued: "^op_[0-9a-f]{40}$" },
+      idempotency_key: { runtimeIssued: "^tig:dual-operation:[0-9a-f]{64}$" },
+    },
+    customKeys: [...ADMISSION_CUSTOM_KEYS],
+    fromStates: ["Valid"],
+    targetStates: ["Admitted"],
+    preserveUnlisted: true,
+  })!;
+  const studio: TicketRules = {
+    fields: {
+      event: "title",
+      startsAt: "admissionWindowStartsAt",
+      venue: "venueRef",
+      entryClass: "accessClass",
+      entryGuidance: null,
+      issueOperation: "operation_id",
+      state: "state",
+    },
+    states: { pending: [], issued: ["Valid"], ended: ["Cancelled", "Expired"] },
+  };
+  const withAdmission: TicketRules = { ...studio, admission };
+  const NOW = Date.parse("2026-10-19T12:00:00Z");
+  const closedTemplate = (state: string, endsAt = "2026-10-19T11:00:00Z") =>
+    Object.fromEntries(
+      ADMISSION_CUSTOM_KEYS.map((key) => [key, ""]).concat([
+        ["title", "Night Market"],
+        ["state", state],
+        ["admissionStatus", state],
+        ["operation_id", `op_${"b".repeat(40)}`],
+        ["admissionWindowStartsAt", "2026-10-19T08:00:00Z"],
+        ["admissionWindowEndsAt", endsAt],
+      ]),
+    );
+  const read = (
+    custom: Record<string, unknown>,
+    rules = withAdmission,
+    overrides: Partial<TicketSource> = {},
+  ) => {
+    const evaluated = evaluateTicket(source({ custom, ...overrides }), {
+      ...context,
+      rules,
+      now: NOW,
+    });
+    return evaluated.ok ? evaluated.ticket : evaluated.refusal;
+  };
+
+  it("says cancelled or expired only for exactly that canonical state", () => {
+    for (const rules of [studio, withAdmission]) {
+      expect(read(closedTemplate("Cancelled"), rules)).toMatchObject({
+        status: "ended",
+        endedAs: "cancelled",
+      });
+      expect(read(closedTemplate("Expired"), rules)).toMatchObject({
+        status: "ended",
+        endedAs: "expired",
+      });
+    }
+    // Another ended state the binding lists ends the ticket, with no reason.
+    expect(
+      read(closedTemplate("Void"), {
+        ...studio,
+        states: { ...studio.states, ended: ["Void"] },
+      }),
+    ).toMatchObject({ status: "ended", endedAs: null });
+    // Not the exact state, or not one the binding lists: never guessed.
+    for (const state of ["cancelled", "EXPIRED", "Suspended", "Listed", ""]) {
+      expect(read(closedTemplate(state))).toMatchObject({
+        status: "unconfirmed",
+        endedAs: null,
+      });
+    }
+    expect(
+      read(closedTemplate("Cancelled"), {
+        ...studio,
+        states: { ...studio.states, ended: ["Expired"] },
+      }),
+    ).toMatchObject({ status: "unconfirmed", endedAs: null });
+  });
+
+  it("refuses another holder's, client's or programme's ticket before any wording", () => {
+    const cancelled = closedTemplate("Cancelled");
+    expect(
+      read(cancelled, withAdmission, { owner: "0x" + "9".repeat(40) }),
+    ).toBe("not_owned");
+    expect(read(cancelled, withAdmission, { orgId: "d".repeat(24) })).toBe(
+      "wrong_client",
+    );
+    expect(read(cancelled, withAdmission, { templateId: "e".repeat(24) })).toBe(
+      "not_in_programme",
+    );
+  });
+
+  it("a still-Valid ticket past its verified entry window stays issued; the closed window is a separate, derived fact", () => {
+    const closed = read(closedTemplate("Valid"));
+    expect(closed).toMatchObject({
+      status: "issued",
+      endedAs: null,
+      entryWindow: { endsAt: "2026-10-19T11:00:00Z", closed: true },
+      // Dual's state is never read as entry.
+      admission: "unavailable",
+    });
+    expect(read(closedTemplate("Valid", "2026-10-19T13:00:00Z"))).toMatchObject(
+      {
+        status: "issued",
+        entryWindow: { endsAt: "2026-10-19T13:00:00Z", closed: false },
+      },
+    );
+  });
+
+  it("knows no entry window without the admission contract's closed template and a valid end time", () => {
+    // P4.2 rules name no window end: nothing is derived from the start.
+    expect(read(closedTemplate("Valid"), studio)).toMatchObject({
+      status: "issued",
+      entryWindow: null,
+    });
+    // Not exactly the closed template: no verified window.
+    expect(read({ ...closedTemplate("Valid"), extra: "x" })).toMatchObject({
+      entryWindow: null,
+    });
+    const missing: Record<string, unknown> = closedTemplate("Valid");
+    delete missing.admissionWindowEndsAt;
+    expect(read(missing)).toMatchObject({ entryWindow: null });
+    expect(read(closedTemplate("Valid", "after the show"))).toMatchObject({
+      entryWindow: null,
+    });
+  });
+
+  it("round-trips through the browser's parser, which refuses an inconsistent or malformed claim", () => {
+    for (const ticket of [
+      read(closedTemplate("Cancelled")),
+      read(closedTemplate("Expired")),
+      read(closedTemplate("Valid")),
+    ]) {
+      expect(parseTicket(JSON.parse(JSON.stringify(ticket)))).toEqual(ticket);
+    }
+    const valid = JSON.parse(JSON.stringify(read(closedTemplate("Valid"))));
+    for (const change of [
+      { endedAs: "cancelled" },
+      { endedAs: "refunded" },
+      { entryWindow: { endsAt: "soon", closed: true } },
+      { entryWindow: { endsAt: "2026-10-19T11:00:00Z", closed: "yes" } },
+      {
+        entryWindow: {
+          endsAt: "2026-10-19T11:00:00Z",
+          closed: true,
+          reason: "x",
+        },
+      },
+    ]) {
+      expect(parseTicket({ ...valid, ...change })).toBeUndefined();
+    }
+    // An older server's ticket, without the new keys, still reads.
+    const { endedAs, entryWindow, ...older } = valid;
+    void endedAs;
+    void entryWindow;
+    expect(parseTicket(older)).toMatchObject({
+      endedAs: null,
+      entryWindow: null,
+    });
+  });
+});

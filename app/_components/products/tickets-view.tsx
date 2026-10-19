@@ -39,10 +39,31 @@ const statusTone: Record<TicketBadge, string> = {
   entry_confirmed: "status-completed",
 };
 
-export function TicketStatusBadge({ status }: { status: TicketBadge }) {
+/**
+ * The badge names Studio's exact end state (Cancelled, Expired) when the
+ * projection verified it; any other ended state stays "No longer valid".
+ */
+export function TicketStatusBadge({
+  status,
+  endedAs = null,
+}: {
+  status: TicketBadge;
+  endedAs?: Ticket["endedAs"];
+}) {
   const t = useTranslations("tickets.status");
-  return <span className={`status ${statusTone[status]}`}>{t(status)}</span>;
+  return (
+    <span className={`status ${statusTone[status]}`}>
+      {t(status === "ended" && endedAs ? endedAs : status)}
+    </span>
+  );
 }
+
+/**
+ * A still-issued ticket whose verified entry window has passed. Its canonical
+ * state is unchanged (still issued, never "expired"); only entry is over.
+ */
+export const entryWindowClosed = (ticket: Ticket) =>
+  ticket.status === "issued" && ticket.entryWindow?.closed === true;
 
 function useStartsAt() {
   const format = useFormatter();
@@ -102,6 +123,7 @@ function TicketsFailure({
 }
 
 function TicketCard({ slug, ticket }: { slug: string; ticket: Ticket }) {
+  const t = useTranslations("tickets");
   const startsAt = useStartsAt()(ticket.event.startsAt);
   return (
     <li>
@@ -116,8 +138,11 @@ function TicketCard({ slug, ticket }: { slug: string; ticket: Ticket }) {
           <strong>{ticket.event.title}</strong>
           {startsAt ? <span>{startsAt}</span> : null}
           {ticket.entryClass ? <span>{ticket.entryClass}</span> : null}
+          {entryWindowClosed(ticket) ? (
+            <span>{t("windowClosedShort")}</span>
+          ) : null}
         </span>
-        <TicketStatusBadge status={ticket.status} />
+        <TicketStatusBadge status={ticket.status} endedAs={ticket.endedAs} />
         <ChevronRight size={20} aria-hidden />
       </Link>
     </li>
@@ -300,13 +325,15 @@ function TicketDetail({
     ticket.status === "admission_recorded"
       ? "entry_confirmed"
       : ticket.status;
+  const endedAs = status === "ended" ? ticket.endedAs : null;
+  const windowClosed = entryWindowClosed(ticket);
   return (
     <>
       <PageHeader
         eyebrow={t("detailEyebrow")}
         title={ticket.event.title}
-        description={t(`statusExplanation.${status}`)}
-        action={<TicketStatusBadge status={status} />}
+        description={t(`statusExplanation.${endedAs ?? status}`)}
+        action={<TicketStatusBadge status={status} endedAs={endedAs} />}
       />
       <section className="card ticket-detail" aria-labelledby="ticket-facts">
         <h2 id="ticket-facts">{t("factsTitle")}</h2>
@@ -336,6 +363,13 @@ function TicketDetail({
       </section>
       <section className="card ticket-detail" aria-labelledby="ticket-entry">
         <h2 id="ticket-entry">{t("entryTitle")}</h2>
+        {windowClosed && ticket.entryWindow ? (
+          <p>
+            {t("windowClosed", {
+              endsAt: startsAt(ticket.entryWindow.endsAt) ?? "",
+            })}
+          </p>
+        ) : null}
         {ticket.entryGuidance ? <p>{ticket.entryGuidance}</p> : null}
         {/* Without ticket-admission-v1, entry is not part of Tickets,
             whatever the ticket says. */}
@@ -347,6 +381,7 @@ function TicketDetail({
           objectId={objectId}
           launchId={launchId}
           recorded={ticket.status === "admission_recorded"}
+          noNewEntry={status === "ended" || windowClosed}
           onOutcome={onOutcome}
         />
       ) : null}

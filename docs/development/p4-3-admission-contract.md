@@ -329,6 +329,13 @@ object_id, proposal_id, request_id } }` exactly once. A replay of the same
   open pass is read again: no pass proof read before an entry (for example
   `operation_readback: current`) is shown after it.
 
+A ticket's verified entry window (wallet presentation only, no runtime
+call): on the exact closed template the wallet's ticket read also takes
+`admissionWindowEndsAt`. A still-`Valid` ticket past it reads "Issued" with
+"entry window closed" said apart, and no new entry is offered. Its canonical
+state is not called `Expired` and nothing is written. Status checks of an
+entry already sent are unchanged.
+
 ## 7. Recovery
 
 | Case               | Runtime                                                   | Wallet                                                                     |

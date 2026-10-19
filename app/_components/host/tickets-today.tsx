@@ -7,7 +7,10 @@ import { ChevronRight, Ticket as TicketIcon } from "lucide-react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Alert } from "@/app/_components/design-system/alert";
 import { Button } from "@/app/_components/design-system/button";
-import { TicketStatusBadge } from "@/app/_components/products/tickets-view";
+import {
+  entryWindowClosed,
+  TicketStatusBadge,
+} from "@/app/_components/products/tickets-view";
 import { newFaceLaunchId } from "@/app/_domain/product-face";
 import type { Ticket } from "@/app/_domain/tickets";
 import {
@@ -73,6 +76,7 @@ function TicketLine({
   href: string;
   timeZone: string;
 }) {
+  const t = useTranslations("tickets");
   const format = useFormatter();
   const when = ticket.event.startsAt
     ? format.dateTime(new Date(ticket.event.startsAt), {
@@ -98,8 +102,11 @@ function TicketLine({
           <strong>{ticket.event.title}</strong>
           {when ? <span>{when}</span> : null}
           {ticket.event.venue ? <span>{ticket.event.venue}</span> : null}
+          {entryWindowClosed(ticket) ? (
+            <span>{t("windowClosedShort")}</span>
+          ) : null}
         </span>
-        <TicketStatusBadge status={ticket.status} />
+        <TicketStatusBadge status={ticket.status} endedAs={ticket.endedAs} />
         <ChevronRight size={20} aria-hidden />
       </Link>
     </li>

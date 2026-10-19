@@ -272,6 +272,25 @@ is the transfer journey's and is refused on a host without it.
   never entry by itself
   ([P4.3 contract](development/p4-3-admission-contract.md)). A failed read or a host without ticket rules is shown as
   unavailable, never as an empty list.
+- Why a ticket can't be used is said only from that same authenticated read
+  (the holder's own object, this client's, a programme template). Each
+  ticket carries two additive, nullable keys (`endedAs`, `entryWindow`); an
+  older ticket body without them still reads.
+  - `endedAs`: an ended ticket whose state is exactly Studio's `Cancelled` or
+    `Expired` reads "Cancelled" or "Expired" ("Dual records this ticket as
+    cancelled/expired. It can no longer be used."). Any other ended state
+    stays "No longer valid", and no reason is shown or invented.
+  - `entryWindow`: with `tickets.admission` and the exact closed ticket
+    template, the wallet reads `admissionWindowEndsAt` (the admission leg's
+    own field) and whether it had passed at this read. A still-issued ticket
+    past it keeps "Issued" and says, apart, that its entry window closed and
+    it can no longer be used to get in. The canonical state is never called
+    `Expired` or changed. P4.2 rules name no window end, so nothing is
+    derived from a start time.
+  - Ended or closed-window tickets offer no new entry. "Check entry status"
+    stays, so an entry already sent is still read back by its original
+    operation.
+  - Suspended, listed or any other unplaced state stays "Not confirmed".
 - The pages are protected: a signed-out visit signs in and returns to the exact
   list or ticket.
 

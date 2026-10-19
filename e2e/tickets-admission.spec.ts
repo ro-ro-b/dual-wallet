@@ -292,3 +292,78 @@ test("Escape at the confirmation cancels with zero writes", async ({
   expect((await dualCustom()).state).toBe("Valid");
   await expect(badges(page)).toHaveText(["Issued"]);
 });
+
+test("at phone width, the native detail says exactly why a verified ticket can't be used: cancelled, expired, or its entry window closed; never guessed, never usable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  const seen = watch(page);
+  const header = page.locator("main .page-header");
+  const entry = page.getByRole("region", { name: "Entry" });
+  const noUsableEntry = async () => {
+    await expect(
+      page.getByRole("button", { name: "Check for entry request" }),
+    ).toHaveCount(0);
+    await expect(page.getByText(/check for their request/)).toHaveCount(0);
+    await expect(page.getByText(/Entry confirmed/)).toHaveCount(0);
+    await expect(
+      entry.getByRole("button", { name: "Check entry status" }),
+    ).toBeVisible();
+  };
+
+  // Cancelled, as Dual records it now (a fictional operator change).
+  await post(apiOrigin, "/__test__/admission-ticket", { state: "Cancelled" });
+  await signInTo(page, DETAIL);
+  await expect(badges(page)).toHaveText(["Cancelled"]);
+  await expect(header).toContainText(
+    "Dual records this ticket as cancelled. It can no longer be used.",
+  );
+  await expect(page.getByText("No longer valid", { exact: true })).toHaveCount(
+    0,
+  );
+  await noUsableEntry();
+  // The ticket itself, and its original issue, stay readable.
+  await expect(page.getByText("Night Market").first()).toBeVisible();
+  await page.getByRole("button", { name: "Show entry pass" }).click();
+  await expectBirth(page);
+  await noHorizontalOverflow(page);
+
+  // Expired.
+  await post(apiOrigin, "/__test__/admission-ticket", { state: "Expired" });
+  await page.reload();
+  await expect(badges(page)).toHaveText(["Expired"]);
+  await expect(header).toContainText(
+    "Dual records this ticket as expired. It can no longer be used.",
+  );
+  await expect(page.getByText(/cancelled/i)).toHaveCount(0);
+  await noUsableEntry();
+
+  // Still Valid, but its verified entry window has passed: the canonical
+  // state is unchanged and said so; the closed window is said apart.
+  await post(apiOrigin, "/__test__/admission-ticket", {
+    state: "Valid",
+    windowClosed: true,
+  });
+  await page.reload();
+  await expect(badges(page)).toHaveText(["Issued"]);
+  await expect(
+    page.getByText(
+      /^The entry window for this ticket closed on .+\. Dual still records it as issued, but it can no longer be used to get in\.$/,
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/expired/i)).toHaveCount(0);
+  await noUsableEntry();
+  await noHorizontalOverflow(page);
+
+  // A state the rules don't place is not guessed at.
+  await post(apiOrigin, "/__test__/admission-ticket", { state: "Suspended" });
+  await page.reload();
+  await expect(badges(page)).toHaveText(["Not confirmed"]);
+  for (const word of [/cancelled/i, /expired/i, /window .* closed/i]) {
+    await expect(page.getByText(word)).toHaveCount(0);
+  }
+  // Nothing was ever written.
+  expect(seen.executes).toEqual([]);
+  expect((await dualCustom()).state).toBe("Suspended");
+  expect(seen.problems).toEqual([]);
+});

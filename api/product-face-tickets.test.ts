@@ -225,6 +225,10 @@ describe("the ticket list", () => {
           },
           entryClass: "Standing",
           entryGuidance: "Doors open at 18:30. Bring photo ID.",
+          // Additive: not an ended ticket, and no verified entry window
+          // without ticket-admission-v1.
+          endedAs: null,
+          entryWindow: null,
           admission: "unavailable",
           modifiedAt: "2026-10-01T00:00:00.000Z",
         },
