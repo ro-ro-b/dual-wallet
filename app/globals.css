@@ -398,6 +398,8 @@ button {
 }
 .auth-panel {
   display: grid;
+  /* One track that never grows past the panel: a long label wraps instead. */
+  grid-template-columns: minmax(0, 1fr);
   min-height: 100svh;
   place-items: center;
   background: var(--surface);
@@ -454,7 +456,7 @@ button {
 }
 .tablist {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-bottom: 24px;
   border-radius: 15px;
@@ -462,6 +464,8 @@ button {
   padding: 5px;
 }
 .tab {
+  min-width: 0;
+  overflow-wrap: anywhere;
   min-height: 44px;
   border: 0;
   border-radius: 11px;
@@ -704,6 +708,16 @@ button {
   flex-direction: column;
   padding: 0;
 }
+/* A face's frame fills the product area edge to edge; the wallet-native
+   pages inside it (Tickets, Loyalty, a native entrance) keep the ordinary
+   content gutters. */
+.content-full > .tickets-view,
+.content-full > .loyalty-view,
+.content-full > .native-product-page {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 54px clamp(24px, 5vw, 72px) 80px;
+}
 .product-face-shell {
   display: flex;
   min-height: 0;
@@ -890,8 +904,13 @@ button {
   gap: 24px;
   margin-bottom: 30px;
 }
+.page-header > div {
+  min-width: 0;
+}
 .page-header h1 {
   margin: 0;
+  /* A one-word title at large text sizes wraps rather than scrolls. */
+  overflow-wrap: anywhere;
   font-size: clamp(2.2rem, 4vw, 3.7rem);
   line-height: 1;
   letter-spacing: -0.055em;
@@ -2035,6 +2054,11 @@ button {
   }
   .content.content-full {
     padding: 0;
+  }
+  .content-full > .tickets-view,
+  .content-full > .loyalty-view,
+  .content-full > .native-product-page {
+    padding: 36px 18px 90px;
   }
   /* One slim row (Back, programme, publisher disclosure) so the frame keeps
      the remaining height below the wallet bar. */

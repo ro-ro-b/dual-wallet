@@ -48,7 +48,7 @@ export async function NativeProductEntrance({
     },
   }[route];
   return (
-    <>
+    <div className="native-product-page">
       <PageHeader {...header} />
       {journeys.map((journey) => (
         <section key={journey} className="card native-entrance">
@@ -68,6 +68,6 @@ export async function NativeProductEntrance({
           {t("home", { brand: brand.name })}
         </Link>
       </div>
-    </>
+    </div>
   );
 }

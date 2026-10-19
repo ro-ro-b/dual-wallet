@@ -503,3 +503,86 @@ test("a fresh reopen lands on the same native pages, read afresh, with no frame"
   await noTokenInTheBrowser(reopened, seen);
   expect(problems).toEqual([]);
 });
+
+/** 200% text: the root doubled (all text is rem), kept across navigations. */
+async function doubleText(page: Page) {
+  await page.addInitScript(() => {
+    const apply = () => {
+      if (document.getElementById("e2e-text-200")) return;
+      const style = document.createElement("style");
+      style.id = "e2e-text-200";
+      style.textContent = "html{font-size:200% !important}";
+      (document.head || document.documentElement).appendChild(style);
+    };
+    if (document.readyState === "loading")
+      document.addEventListener("DOMContentLoaded", apply);
+    else apply();
+    new MutationObserver(apply).observe(document, {
+      childList: true,
+      subtree: true,
+    });
+  });
+}
+
+/** Puts doubled text back if a client navigation replaced the head's style. */
+async function keepDoubleText(page: Page) {
+  if (
+    (await page.evaluate(
+      () => getComputedStyle(document.documentElement).fontSize,
+    )) !== "32px"
+  ) {
+    await page.addStyleTag({ content: "html{font-size:200% !important}" });
+  }
+}
+
+/** Doubled text, no horizontal scroll, and the page's h1 off the screen edge. */
+async function fitsWithGutter(page: Page, gutter = true) {
+  await page.waitForLoadState("networkidle");
+  await keepDoubleText(page);
+  const layout = await page.evaluate(() => ({
+    root: getComputedStyle(document.documentElement).fontSize,
+    overflow: document.documentElement.scrollWidth - window.innerWidth,
+    h1Left: document.querySelector("main h1")?.getBoundingClientRect().left,
+  }));
+  expect(layout.root).toBe("32px");
+  expect(layout.overflow).toBeLessThanOrEqual(0);
+  if (gutter) expect(layout.h1Left).toBeGreaterThanOrEqual(16);
+}
+
+test("at 360px with 200% text: sign-in, a native ticket, help and the membership error fit, with gutters", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  await doubleText(page);
+  const ticket = `${TICKETS}/${TICKET_IDS.today}`;
+  await page.goto(ticket);
+  await expect(page).toHaveURL(`/login?next=${encodeURIComponent(ticket)}`);
+  await expect(page.getByRole("tab", { name: "Passkey" })).toBeVisible();
+  await fitsWithGutter(page);
+  await signIn(page);
+  await expect(page).toHaveURL(ticket);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Harbour Night" }),
+  ).toBeVisible();
+  await fitsWithGutter(page);
+  await page.goto(`/products/${LOYALTY_SLUG}/support`);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Help" }),
+  ).toBeVisible();
+  await fitsWithGutter(page);
+  // The membership page when the programme can't be read: its one-word
+  // heading wraps instead of scrolling the page sideways.
+  await page.route(`**/api/faces/${LOYALTY_SLUG}/loyalty`, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "runtime_unavailable" }),
+    }),
+  );
+  await page.goto(MEMBERSHIP);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Membership" }),
+  ).toBeVisible();
+  await expect(page.getByRole("alert").first()).toBeVisible();
+  await fitsWithGutter(page);
+});

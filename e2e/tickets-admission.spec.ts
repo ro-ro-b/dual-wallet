@@ -367,3 +367,88 @@ test("at phone width, the native detail says exactly why a verified ticket can't
   expect((await dualCustom()).state).toBe("Suspended");
   expect(seen.problems).toEqual([]);
 });
+
+test("at 360px with 200% text: the entry confirmation, and a cancelled or closed-window ticket, fit and stay usable from the keyboard", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  // Doubled text is applied after hydration (an earlier head change reads as
+  // a hydration mismatch), and put back after every navigation.
+  // Puts doubled text back if a client navigation replaced the head's style.
+  const keepDoubleText = async () => {
+    if (
+      (await page.evaluate(
+        () => getComputedStyle(document.documentElement).fontSize,
+      )) !== "32px"
+    ) {
+      await page.addStyleTag({ content: "html{font-size:200% !important}" });
+    }
+  };
+  const fits = async () => {
+    await page.waitForLoadState("networkidle");
+    await keepDoubleText();
+    const layout = await page.evaluate(() => ({
+      root: getComputedStyle(document.documentElement).fontSize,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      h1Left: document.querySelector("main h1")?.getBoundingClientRect().left,
+    }));
+    expect(layout.root).toBe("32px");
+    expect(layout.overflow).toBeLessThanOrEqual(0);
+    expect(layout.h1Left).toBeGreaterThanOrEqual(16);
+  };
+  const seen = watch(page);
+  await post(runtimeOrigin, "/__test__/gate-request", {
+    object_id: ADMISSION_TICKET,
+  });
+  await signInTo(page, DETAIL);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Night Market" }),
+  ).toBeVisible();
+  await fits();
+  await keepDoubleText();
+  await tabTo(page, "Check for entry request");
+  await page.keyboard.press("Enter");
+  await tabTo(page, "Review entry request");
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Confirm your entry" });
+  await expect(dialog).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => getComputedStyle(document.documentElement).fontSize,
+    ),
+  ).toBe("32px");
+  const cancel = dialog.getByRole("button", { name: "Cancel" });
+  const confirm = dialog.getByRole("button", { name: "Confirm entry" });
+  await expect(cancel).toBeFocused();
+  await expect(confirm).toBeVisible();
+  for (const button of [cancel, confirm]) {
+    const box = await button.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(360);
+    expect(box!.height).toBeGreaterThanOrEqual(24);
+  }
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+  // Cancel from the keyboard: nothing is sent.
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  expect(seen.executes).toEqual([]);
+
+  await post(apiOrigin, "/__test__/admission-ticket", { state: "Cancelled" });
+  await page.reload();
+  await expect(badges(page)).toHaveText(["Cancelled"]);
+  await fits();
+  await post(apiOrigin, "/__test__/admission-ticket", {
+    state: "Valid",
+    windowClosed: true,
+  });
+  await page.reload();
+  await expect(
+    page.getByText(/^The entry window for this ticket closed on/),
+  ).toBeVisible();
+  await fits();
+  expect(seen.problems).toEqual([]);
+});
