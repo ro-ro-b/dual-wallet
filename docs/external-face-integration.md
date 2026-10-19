@@ -399,6 +399,28 @@ repository (G1): the runtime needs the public key in
 `TIG_PRODUCT_FACE_WALLET_ASSERTION_KEYS` and the exact wallet tenant origins in
 `TIG_PRODUCT_FACE_WALLET_ISSUERS`.
 
+**Runtime workload authentication (optional, default off).** A bound runtime
+deployed behind Vercel Deployment Protection answers an unauthenticated
+server-to-server call with a redirect to its sign-in, which the wallet never
+follows (`redirect: "error"`). `TIG_RUNTIME_OIDC_ORIGINS` (server-only,
+comma-separated exact canonical `https` origins) names the runtimes that
+accept this deployment through Trusted Sources. Every runtime call goes
+through one transport (`runtimeFetch` in `api/face-runtime.ts`); only a call
+whose destination origin is listed carries the deployment's current OIDC
+token in `x-vercel-trusted-oidc-idp-token`, read by the official
+`getVercelOidcToken` (`@vercel/oidc`) from the platform's function context
+(`api/runtime-oidc.ts`). The token is never read from an inbound request and
+never sent to Dual, a face, the browser or any unlisted origin, and never
+logged, stored or returned. A listed origin whose token is unavailable, or any
+invalid entry (not exact `https`, a path, a pattern, or the Dual API origin),
+refuses the call before anything is sent, which callers already treat as an
+unavailable runtime: a step that may have been dispatched stays
+`outcome_unknown` under its original operation. Unset, every call is exactly
+as before. The token authenticates the calling deployment only; the face
+assertion, request hash, `jti` and every object, holder, client and session
+binding still decide what a call may do. The runtime's Trusted Sources rule is
+configured on the runtime's project, outside this repository.
+
 **Honest residual.** There is no runtime face session: every runtime
 operation needs its own assertion. Each minted but unconsumed assertion stays
 usable for its one exact request (operation, target and `request_hash`) until

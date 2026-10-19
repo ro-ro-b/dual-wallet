@@ -465,6 +465,10 @@ documents it links. Keep that guide synchronized with the code and tests.
   - `FACE_ASSERTION_SIGNING_KEY` and `FACE_ASSERTION_KEY_ID`: the Ed25519
     signer for one-time product-face assertions. Secret; absent or invalid
     fails closed with 503.
+  - `TIG_RUNTIME_OIDC_ORIGINS`: default off; exact https runtime origins that
+    receive this deployment's Vercel OIDC token on runtime calls
+    (`api/runtime-oidc.ts`). Workload authentication only, never holder
+    authority; not secret.
   - `WALLET_HOST_CONFIGURATION` and `WALLET_HOST_CONFIGURATION_SHA256`: a
     branded host's canonical configuration and its pin
     (`docs/branded-wallet-hosts.md`). Not secret and also a build input.

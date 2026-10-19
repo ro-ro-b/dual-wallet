@@ -3,6 +3,7 @@ import "server-only";
 import { fetchBounded } from "@/api/face-artifact";
 import { sha256Hash, type AssertionTarget } from "@/api/face-assertion";
 import type { ProductFaceBinding } from "@/api/product-face-binding";
+import { runtimeWorkloadAuth, TRUSTED_OIDC_HEADER } from "@/api/runtime-oidc";
 import {
   isTicketHostOperation,
   type TicketHostOperation,
@@ -29,6 +30,36 @@ const RUNTIME_ENDPOINT = "/api/product-face/v1/operations";
 const REGISTRATION_STATUS_ENDPOINT =
   "/api/product-face/v1/registrations/status";
 const PROPOSAL_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * The one transport of every call to a bound runtime: `fetchBounded` (no
+ * cookies, no redirects, bounded, timed out) plus, only for a destination in
+ * TIG_RUNTIME_OIDC_ORIGINS, this deployment's workload token
+ * (api/runtime-oidc.ts). A configured destination without a token is not
+ * called at all: `undefined`, as for an unreachable runtime, and nothing is
+ * sent. The token authenticates the deployment, never the holder.
+ */
+async function runtimeFetch(
+  url: string,
+  maxBytes: number,
+  init: RequestInit & { headers: Record<string, string> },
+  timeoutMs: number,
+): ReturnType<typeof fetchBounded> {
+  const auth = await runtimeWorkloadAuth(url);
+  if (!auth.ok) return undefined;
+  // Only this module sets the workload header, and only from the platform.
+  const headers = Object.fromEntries(
+    Object.entries(init.headers).filter(
+      ([name]) => name.toLowerCase() !== TRUSTED_OIDC_HEADER,
+    ),
+  );
+  return fetchBounded(
+    url,
+    maxBytes,
+    { ...init, headers: { ...headers, ...auth.headers } },
+    timeoutMs,
+  );
+}
 
 export interface TrustedReadRequest {
   operation: TrustedRuntimeRead;
@@ -83,7 +114,7 @@ export async function trustedRuntimeRead(
   ) {
     return { ok: false, code: "runtime_refused" };
   }
-  const response = await fetchBounded(
+  const response = await runtimeFetch(
     `${binding.origin}${RUNTIME_ENDPOINT}`,
     MAX_RESPONSE_BYTES,
     {
@@ -177,7 +208,7 @@ export async function readRegistrationStatus(
 ): Promise<RegistrationRuntimeStatus> {
   let response: Awaited<ReturnType<typeof fetchBounded>>;
   try {
-    response = await fetchBounded(
+    response = await runtimeFetch(
       `${binding.origin}${REGISTRATION_STATUS_ENDPOINT}`,
       MAX_RESPONSE_BYTES,
       {
@@ -335,7 +366,7 @@ async function postRuntimeOperation(
   assertion: string,
 ) {
   try {
-    return await fetchBounded(
+    return await runtimeFetch(
       `${runtime.origin}${RUNTIME_ENDPOINT}`,
       MAX_RESPONSE_BYTES,
       {
@@ -1259,7 +1290,7 @@ export async function reserveSettle(
   };
   let response: Awaited<ReturnType<typeof fetchBounded>>;
   try {
-    response = await fetchBounded(
+    response = await runtimeFetch(
       `${binding.origin}${RUNTIME_ENDPOINT}`,
       MAX_RESPONSE_BYTES,
       {
@@ -1405,7 +1436,7 @@ async function runtimeOperationCall(
 ): Promise<TransferRuntimeResult> {
   let response: Awaited<ReturnType<typeof fetchBounded>>;
   try {
-    response = await fetchBounded(
+    response = await runtimeFetch(
       `${binding.origin}${RUNTIME_ENDPOINT}`,
       MAX_RESPONSE_BYTES,
       {

@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.4",
+    "@vercel/oidc": "4.0.1",
     "client-only": "^0.0.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",

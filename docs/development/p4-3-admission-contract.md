@@ -43,7 +43,7 @@ Read-only source facts this contract is derived from:
 - Staff admission (gate scan and request) stays in Studio's event-scoped staff
   access. The wallet never creates a gate request.
 
-## 3. Transport (existing, unchanged)
+## 3. Transport (existing; optional workload authentication)
 
 Every operation is one server-to-server call from the wallet BFF:
 
@@ -70,6 +70,12 @@ input}` (`runtimeRequestHash`).
   `jti` it has seen, and any call whose body does not hash to `request_hash`.
 - Bounded response (64 KiB), 8 s timeout, no redirects, no cookies. No new
   key, endpoint, discovery mechanism or credential channel.
+- Optional workload authentication for a runtime behind Vercel Deployment
+  Protection: when `TIG_RUNTIME_OIDC_ORIGINS` lists the binding origin, the
+  call also carries the wallet deployment's platform OIDC token in
+  `x-vercel-trusted-oidc-idp-token` (external-face-integration.md, "Runtime
+  workload authentication"). It identifies the calling deployment only and
+  never replaces the assertion.
 
 The holder is ALWAYS the assertion's `holder`; no input field names a holder,
 wallet, organisation, template, event or endpoint, and the runtime ignores

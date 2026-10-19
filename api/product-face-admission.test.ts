@@ -20,6 +20,12 @@ import {
   morrowDocument,
 } from "@/test/wallet-host-fixtures";
 
+// The platform's workload token (api/runtime-oidc.ts), FICTIONAL here; the
+// helper is only reached when TIG_RUNTIME_OIDC_ORIGINS names the runtime.
+const platformToken = jest.fn();
+jest.mock("@vercel/oidc", () => ({
+  getVercelOidcToken: () => platformToken(),
+}));
 const getWallet = jest.fn();
 const getObjectById = jest.fn();
 jest.mock("@/api/web-sdk-client", () => ({
@@ -1150,5 +1156,130 @@ describe("capability and session", () => {
     expect(all).not.toMatch(
       /assertion|eyJ|faces\.example|access_?token|refresh/i,
     );
+  });
+});
+
+describe("workload OIDC to the Tickets runtime (TIG_RUNTIME_OIDC_ORIGINS)", () => {
+  const HEADER = "x-vercel-trusted-oidc-idp-token";
+  const TOKEN = [
+    Buffer.from('{"alg":"none","fictional":true}').toString("base64url"),
+    Buffer.from('{"sub":"fictional-wallet-preview"}').toString("base64url"),
+    "ZmljdGlvbmFs",
+  ].join(".");
+  beforeEach(() => {
+    platformToken.mockReset().mockResolvedValue(TOKEN);
+    process.env.TIG_RUNTIME_OIDC_ORIGINS = "https://faces.example";
+  });
+  afterEach(() => {
+    delete process.env.TIG_RUNTIME_OIDC_ORIGINS;
+  });
+  /** Every outbound call, with the workload header it carried (if any). */
+  function observe(services: ReturnType<typeof fakeServices>) {
+    const sent: Array<{ origin: string; token: string | null }> = [];
+    global.fetch = (async (url: string, init: RequestInit) => {
+      sent.push({
+        origin: new URL(url).origin,
+        token: new Headers(init.headers).get(HEADER),
+      });
+      return services.fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    return sent;
+  }
+
+  it("authenticates only the runtime: one token on each runtime call, none to Dual or the browser", async () => {
+    const services = fakeServices();
+    const sent = observe(services);
+    const browser = new Browser();
+    const { operationId, custom } = await begun(browser);
+    await browser.admission({
+      transition: "confirm",
+      operation_id: operationId,
+    });
+    expect((await browser.execute(operationId, custom)).status).toBe(200);
+    const verified = await browser.admission({
+      transition: "record_action",
+      operation_id: operationId,
+      action_id: "act-admit-0001",
+    });
+    expect(verified.body.outcome).toEqual(
+      expect.objectContaining({ status: "admitted" }),
+    );
+    await browser.admission({ transition: "pass" });
+    const runtime = sent.filter(
+      (call) => call.origin === "https://faces.example",
+    );
+    const dual = sent.filter((call) => call.origin !== "https://faces.example");
+    expect(runtime.length).toBeGreaterThanOrEqual(5);
+    expect(runtime.every((call) => call.token === TOKEN)).toBe(true);
+    // The holder's own execution goes to Dual without it.
+    expect(dual.length).toBeGreaterThanOrEqual(1);
+    expect(dual.every((call) => call.token === null)).toBe(true);
+    // The holder's authority is still the face assertion, as before.
+    expect(
+      services.calls.every((call) => call.holder === HOLDER.toLowerCase()),
+    ).toBe(true);
+    expect(seen.join("\n")).not.toContain(TOKEN);
+  });
+
+  it("without a platform token, nothing reaches the runtime and nothing can be signed", async () => {
+    platformToken.mockRejectedValue(new Error(`fictional context ${TOKEN}`));
+    const services = fakeServices();
+    const sent = observe(services);
+    const browser = new Browser();
+    const checked = await browser.admission({ transition: "check" });
+    expect(checked.status).toBeGreaterThanOrEqual(500);
+    expect(sent).toEqual([]);
+    expect(services.calls).toEqual([]);
+    expect(JSON.stringify(checked.body)).not.toContain(TOKEN);
+    expect(seen.join("\n")).not.toContain("fictional context");
+  });
+
+  it("a token outage after dispatch keeps the original operation: unknown, then admitted by status", async () => {
+    const services = fakeServices();
+    const sent = observe(services);
+    const browser = new Browser();
+    const { operationId, custom } = await begun(browser);
+    await browser.admission({
+      transition: "confirm",
+      operation_id: operationId,
+    });
+    await browser.execute(operationId, custom);
+    // The platform cannot issue a token now: verification is not sent.
+    platformToken.mockRejectedValue(new Error("unavailable"));
+    const before = sent.length;
+    expect(
+      (
+        await browser.admission({
+          transition: "record_action",
+          operation_id: operationId,
+          action_id: "act-admit-0001",
+        })
+      ).body.outcome,
+    ).toEqual({ status: "unknown", operationId });
+    expect(sent.length).toBe(before);
+    // Back: only the original operation's read-only status, never a resend.
+    platformToken.mockResolvedValue(TOKEN);
+    const reopened = browser.reopen();
+    expect(
+      (
+        await reopened.admission({
+          transition: "status",
+          operation_id: operationId,
+        })
+      ).body.outcome,
+    ).toEqual(expect.objectContaining({ status: "admitted" }));
+    expect(services.executions).toBe(1);
+    expect(services.count("admission.reserve")).toBe(1);
+  });
+
+  it("a runtime the list does not name is called exactly as before, without a token", async () => {
+    process.env.TIG_RUNTIME_OIDC_ORIGINS = "https://other-runtime.example";
+    const services = fakeServices();
+    const sent = observe(services);
+    const browser = new Browser();
+    await begun(browser);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every((call) => call.token === null)).toBe(true);
+    expect(platformToken).not.toHaveBeenCalled();
   });
 });
