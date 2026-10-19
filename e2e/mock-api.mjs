@@ -11,8 +11,8 @@ import {
   TICKET_IDS,
   TICKET_TEMPLATE,
 } from "./tickets-home/environment.mjs";
-import { CANON_TEMPLATE } from "./loyalty/environment.mjs";
-import { loyaltyWorld } from "./loyalty/world.mjs";
+import { CANON_TEMPLATE, PASS_TEMPLATE } from "./loyalty/environment.mjs";
+import { integratedLoyaltyWorld, loyaltyWorld } from "./loyalty/world.mjs";
 
 const expectedOrganizationId =
   process.env.DEFAULT_ORGANIZATION_ID || "000000000000000000000001";
@@ -299,12 +299,24 @@ function seedTickets(store) {
 const admissionFixture = process.env.MOCK_TICKETS_ADMISSION === "1";
 // Loyalty fixture (MOCK_LOYALTY=1): a FICTIONAL provider world for the
 // issuer-owned canonical membership and the member's pass (e2e/loyalty).
+// With MOCK_LOYALTY_DUAL_URL, that world is Studio's integrated driver's
+// fictional provider instead (playwright.loyalty-studio.config.ts).
+const loyaltyDualUrl = process.env.MOCK_LOYALTY_DUAL_URL || "";
 const loyalty =
   process.env.MOCK_LOYALTY === "1"
-    ? loyaltyWorld({
-        organization: process.env.DEFAULT_ORGANIZATION_ID || "",
-        canonicalTemplate: CANON_TEMPLATE,
-      })
+    ? loyaltyDualUrl
+      ? integratedLoyaltyWorld({
+          upstream: loyaltyDualUrl,
+          holderOf: (request) =>
+            authorized(request)
+              ? wallet(bearerAccount(request)).account.address
+              : "",
+          templates: [CANON_TEMPLATE, PASS_TEMPLATE],
+        })
+      : loyaltyWorld({
+          organization: process.env.DEFAULT_ORGANIZATION_ID || "",
+          canonicalTemplate: CANON_TEMPLATE,
+        })
     : null;
 function seedAdmissionTicket(store) {
   const now = Date.now();

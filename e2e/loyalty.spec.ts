@@ -17,6 +17,10 @@ const { apiOrigin, runtimeOrigin } = loyaltyFixtureEnvironment();
 const WAITING_FOR_VERIFICATION =
   "Waiting for the programme to verify your last activity. You can record another once it's verified.";
 const PAGE = `/products/${LOYALTY_SLUG}/loyalty`;
+// Set by playwright.loyalty-studio.config.ts: the runtime is Studio's real
+// Loyalty member leg, whose participant custody never creates a membership
+// without the member's own pass.
+const STUDIO_INTEGRATED = process.env.LOYALTY_FIXTURE_STUDIO_INTEGRATED === "1";
 
 async function post(origin: string, path: string, body: unknown = {}) {
   const response = await fetch(`${origin}${path}`, {
@@ -363,11 +367,31 @@ test("a membership without the member's own pass is not active, and nothing can 
     page.getByText("Your request to join is with the programme team."),
   ).toBeVisible();
   await post(runtimeOrigin, "/__test__/approve");
-  await post(runtimeOrigin, "/__test__/create", { pass: false });
-  await page.reload();
-  await expect(
-    page.getByText(/its pass isn't in your wallet yet/),
-  ).toBeVisible();
+  if (STUDIO_INTEGRATED) {
+    // Studio refuses the passless birth itself (its setup delegation is no
+    // record-scoped operator session) and writes nothing, so the member
+    // still waits for the programme team.
+    const refused = await fetch(`${runtimeOrigin}/__test__/create`, {
+      method: "POST",
+      body: JSON.stringify({ pass: false }),
+    });
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).status).toBe(
+      "participant_opening_session_scope_required",
+    );
+    await page.reload();
+    await expect(
+      page.getByText(
+        /The programme team still needs to create your membership/,
+      ),
+    ).toBeVisible();
+  } else {
+    await post(runtimeOrigin, "/__test__/create", { pass: false });
+    await page.reload();
+    await expect(
+      page.getByText(/its pass isn't in your wallet yet/),
+    ).toBeVisible();
+  }
   await expect(
     page.getByRole("button", { name: "Submit activity" }),
   ).toHaveCount(0);

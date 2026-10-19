@@ -199,3 +199,57 @@ export function loyaltyWorld({ organization, canonicalTemplate }) {
 
   return { reset, act, handle, objects: () => [...objects.values()] };
 }
+
+/**
+ * Integrated mode (MOCK_LOYALTY_DUAL_URL, playwright.loyalty-studio.config.ts):
+ * the provider world is the FICTIONAL provider of Studio's integrated driver
+ * (Studio scripts/loyalty-face-integrated.mjs), so the wallet reads exactly what
+ * Studio's real Loyalty runtime wrote. The provider's public views, action logs
+ * and state changes are forwarded as they are; the holder's own authenticated
+ * listing of a Loyalty template is forwarded naming only that holder (the driver
+ * answers objects that holder owns, nothing else). Still not Dual.
+ */
+export function integratedLoyaltyWorld({ upstream, holderOf, templates }) {
+  async function relay(response, target, headers = {}) {
+    const answer = await fetch(target, {
+      headers: { accept: "application/json", ...headers },
+    });
+    response.writeHead(answer.status, { "Content-Type": "application/json" });
+    response.end(await answer.text());
+  }
+  async function handle(request, response, url, respond) {
+    const { pathname } = url;
+    if (request.method !== "GET") return false;
+    if (pathname === "/public/action-logs") {
+      return (
+        await relay(response, `${upstream}${pathname}${url.search}`),
+        true
+      );
+    }
+    if (/^\/public\/objects\/[0-9a-f]{24}(\/state-changes)?$/.test(pathname)) {
+      const answer = await fetch(`${upstream}${pathname}${url.search}`, {
+        headers: { accept: "application/json" },
+      });
+      // Another fixture's object: not the Loyalty world's to answer.
+      if (answer.status === 404) return false;
+      response.writeHead(answer.status, { "Content-Type": "application/json" });
+      response.end(await answer.text());
+      return true;
+    }
+    if (
+      pathname === "/objects" &&
+      templates.includes(url.searchParams.get("template_id"))
+    ) {
+      const holder = holderOf(request);
+      if (!holder) return (respond(response, 401, {}), true);
+      return (
+        await relay(response, `${upstream}${pathname}${url.search}`, {
+          "x-local-fake-holder": holder,
+        }),
+        true
+      );
+    }
+    return false;
+  }
+  return { reset() {}, handle, objects: () => [] };
+}

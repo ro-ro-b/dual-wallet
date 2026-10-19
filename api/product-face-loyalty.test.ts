@@ -1218,6 +1218,55 @@ describe("a two-effect birth (issuer mint, then its post-mint update) proves the
       status: "unconfirmed",
     });
   });
+
+  it("stays active once the canonical moves on: the opening update is then historical", async () => {
+    const browser = await bornMember();
+    await submit(browser, "Workshop sign-in 0042");
+    expect(w.objects.get(CANON)!.nonce).toBe(3);
+    expect((await membership(browser)).membership).toEqual({
+      status: "active",
+      membership: expect.objectContaining({ objectId: CANON }),
+    });
+  });
+
+  it("is never active for a single-mint birth whose opening the runtime relabels as an update", async () => {
+    const browser = new Browser();
+    await browser.loyalty({ transition: "join", consent });
+    w.approve();
+    w.create();
+    w.pass();
+    rewrite = (operation, [status, body]) => {
+      if (operation !== "loyalty.membership.read") return [status, body];
+      const value = body as Record<string, unknown>;
+      return [
+        status,
+        {
+          ...value,
+          opening: {
+            ...(value.opening as object),
+            action_name: "update",
+          },
+        },
+      ];
+    };
+    expect((await membership(browser)).membership).toEqual({
+      status: "unconfirmed",
+    });
+  });
+
+  it("claims nothing when the birth cannot be read (a failed first-change read is unconfirmed)", async () => {
+    const browser = await bornMember();
+    const read = objectsApi.listStateChangesPublic.getMockImplementation()!;
+    objectsApi.listStateChangesPublic.mockImplementation(
+      (input: { objectId: string; order?: string }, init: unknown) =>
+        input.objectId === CANON && input.order === "asc"
+          ? Promise.reject(new Error("fictional provider outage"))
+          : read(input, init),
+    );
+    expect((await membership(browser)).membership).toEqual({
+      status: "unconfirmed",
+    });
+  });
 });
 
 describe("activity: submitted, then counted, only from proof of exactly this submission", () => {
