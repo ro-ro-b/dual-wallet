@@ -9,6 +9,7 @@ import {
   type HostConfigurationState,
   type WalletHostConfiguration,
 } from "@/api/host-configuration";
+import { faceAssertionPublicKey } from "@/api/face-assertion";
 import type { ProductFaceBinding } from "@/api/product-face-binding";
 import { isHandoverEntryPath } from "@/app/_domain/navigation";
 import { taskPathFromPathname } from "@/app/_domain/product-face";
@@ -409,6 +410,24 @@ function readbackJourneys({ tickets, loyalty, ...rest }: HostJourneys) {
   };
 }
 
+export const ASSERTION_TRUST_SCHEMA = "dual-wallet-assertion-trust-v1";
+
+/**
+ * The wallet's face-assertion trust, as a client's Tickets or Loyalty service
+ * binds it: this host's entrance origin as the issuer, and the public key of
+ * the signer it actually validated under its key ID. Public material only;
+ * null when the signer is missing or invalid.
+ */
+function assertionTrust(origin: string) {
+  const signer = faceAssertionPublicKey();
+  if (!signer) return null;
+  return {
+    schema: ASSERTION_TRUST_SCHEMA,
+    issuer: origin,
+    keys: { [signer.kid]: { publicKey: signer.publicKey, issuer: origin } },
+  };
+}
+
 /**
  * GET /api/host/configuration: what this deployment serves, for Studio and
  * Root to compare with the approved configuration and engine release. Public
@@ -431,6 +450,12 @@ export function hostReadback() {
     journeys: configuration ? readbackJourneys(configuration.journeys) : null,
     faces: configuration ? [...configuration.faces] : null,
     status: host.status,
+    // Only an active host serving Tickets or Loyalty reports it, so every
+    // other readback keeps its shape.
+    ...(configuration &&
+    (configuration.journeys.tickets || configuration.journeys.loyalty)
+      ? { assertionTrust: assertionTrust(configuration.entrance.origin) }
+      : {}),
   };
 }
 

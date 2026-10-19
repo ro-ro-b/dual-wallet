@@ -464,6 +464,33 @@ it. `.vercel` is ignored, so the CLI's own folder never makes a checkout dirty.
 `absent` carries only `schema`, `engine` and `status`. Studio and Root compare
 it with the approved configuration and the engine release.
 
+An `active` host that serves Tickets or Loyalty (either journey on) also
+reports `assertionTrust`, the face-assertion trust its client's Studio
+services bind to (one client wallet: its products share this origin, brand
+and key):
+
+```json
+"assertionTrust": {
+  "schema": "dual-wallet-assertion-trust-v1",
+  "issuer": "https://wallet.morrow.example",
+  "keys": {
+    "<FACE_ASSERTION_KEY_ID>": {
+      "publicKey": "-----BEGIN PUBLIC KEY-----\n<Ed25519 SPKI>\n-----END PUBLIC KEY-----\n",
+      "issuer": "https://wallet.morrow.example"
+    }
+  }
+}
+```
+
+The issuer is the entrance origin. The key is the public half of the signer
+the wallet actually validated (`createPublicKey` of the Ed25519 signing key,
+under its validated key ID): no private material and no raw variable is ever
+serialized, and nothing comes from the caller. With the signer missing or
+invalid it is `null`. Every other readback (`invalid`, `absent`, and an
+active host serving neither) has no `assertionTrust` key, exactly as before.
+Studio reads it from the exact approved host origin and compares organisation,
+configuration and engine before binding; Root approves any new live trust.
+
 ## Lifecycle
 
 - **Studio** drafts, validates (the same schema), approves the exact

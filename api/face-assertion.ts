@@ -3,6 +3,7 @@ import "server-only";
 import {
   createHash,
   createPrivateKey,
+  createPublicKey,
   randomBytes,
   sign,
   type KeyObject,
@@ -64,6 +65,22 @@ export function faceAssertionSigner(): Signer | undefined {
   const signer = key && KEY_ID.test(kid) ? { kid, key } : undefined;
   cachedSigner = { source, signer };
   return signer;
+}
+
+/**
+ * The PUBLIC half of the validated signer, for the host's readback: its key ID
+ * and its Ed25519 public key as SPKI PEM, derived from the signing key itself
+ * (never from another variable or a caller). Undefined when the signer is
+ * absent or invalid.
+ */
+export function faceAssertionPublicKey():
+  { kid: string; publicKey: string } | undefined {
+  const signer = faceAssertionSigner();
+  if (!signer) return undefined;
+  const publicKey = createPublicKey(signer.key)
+    .export({ type: "spki", format: "pem" })
+    .toString();
+  return { kid: signer.kid, publicKey };
 }
 
 export function sha256Hash(value: string) {
