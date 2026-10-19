@@ -533,6 +533,21 @@
       "retry": "Try again"
     }
   },
+  "productEntrance": {
+    "homeDescription": "Choose where to go.",
+    "supportTitle": "Help",
+    "endedTitle": "This page has closed",
+    "endedDescription": "Nothing from {programme} is open on this page.",
+    "where": {
+      "tickets": "Your {programme} tickets are kept in this wallet, not on this page.",
+      "loyalty": "Your {programme} membership is kept in this wallet, not on this page."
+    },
+    "open": {
+      "tickets": "Open your tickets",
+      "loyalty": "Open your membership"
+    },
+    "home": "Back to {brand} home"
+  },
   "products": {
     "eyebrow": "Programmes",
     "title": "Products",

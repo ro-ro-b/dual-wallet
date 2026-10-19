@@ -30,6 +30,10 @@ export const optionalHostJourneys: readonly HostJourney[] = [
   "loyalty",
 ];
 
+/** The wallet-native journeys: pages of their own, never a face frame. */
+export const nativeHostJourneys = ["tickets", "loyalty"] as const;
+export type NativeHostJourney = (typeof nativeHostJourneys)[number];
+
 /** The journeys every configuration states; the rest are opt-in keys. */
 export const requiredHostJourneys: readonly HostJourney[] = hostJourneys.filter(
   (journey) => !optionalHostJourneys.includes(journey),

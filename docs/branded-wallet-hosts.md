@@ -283,6 +283,35 @@ is the transfer journey's and is refused on a host without it.
   ([loyalty-benefit-redeem-v1](./proposals/loyalty-benefit-redeem-v1.md)).
   Without the key, nothing changes.
 
+### Native-only faces (Tickets, Loyalty)
+
+- A face is native-only on a branded host when it serves Tickets or Loyalty
+  there and backs none of the host's enabled framed journeys (registration,
+  My products, service progress, quote decisions, transfer;
+  `nativeOnlyJourneys` in `api/wallet-host.ts`). Registration and My
+  products are backed by every face, so a host that enables either has no
+  native-only face.
+- None of its pages renders a frame, so its artifact is never read by the
+  wallet server or loaded by the browser. Its routes that need no journey are
+  wallet-native pages:
+  - the entrance `/products/<slug>` (and `/home`) is the face's native
+    journey, `/tickets` or `/loyalty`; a face serving both shows a choice of
+    them;
+  - help `/support` and the end state `/ended` say where the programme's
+    tickets or membership are kept, and link to those native journeys and the
+    brand's Home;
+  - a deeper path under them goes back to the entrance.
+- They read and claim nothing about the holder's tickets or membership. Every
+  fact stays with the native journeys, their BFF assertions, journals and
+  proofs. A disabled journey's task and another client's face stay 404.
+- This is what lets those faces work when their bound backend sits behind
+  Vercel Authentication. The browser never contacts that backend, and the
+  runtime calls are server-side through the default-off exact-origin OIDC
+  transport (`TIG_RUNTIME_OIDC_ORIGINS`). A face with a framed journey keeps
+  its frame unchanged, as does every face of the generic wallet; such a frame
+  cannot load from a protected backend
+  ([P4 native entrances](development/p4-native-entrances.md)).
+
 ### Enforcement is on the server
 
 - **Pages**: the request proxy answers a disabled journey's pages, another

@@ -1,0 +1,29 @@
+{
+  "schema": "tig-product-face-manifest-v1",
+  "contract": "dual-product-face-v1",
+  "contractRevision": 19,
+  "programmeKind": "tickets",
+  "applicationId": "fictional.tickets.harbour-nights",
+  "version": "1.0.0",
+  "publisher": "harbour-nights",
+  "programmeId": "harbour-nights-events",
+  "programmeName": "Harbour Nights (fictional)",
+  "brandId": "harbour-nights",
+  "contentVersion": "1.0.0",
+  "files": {
+    "assets/logo.png": "sha256:282cba7d64bef7fcb707356817857ea89806365383c02e6922b7e26e3357c6b7",
+    "content.json": "sha256:f88320674d586718e1bea0837d080a9e667b6a2e11c3a2f1b5a205f88307cb5a",
+    "face.css": "sha256:dd403cfda115c1a77dc24e5abc3c7e038ae1907614cffa2897bff2728010f37d",
+    "face.js": "sha256:922ecf5adffa03bb53e73b716ba2a522b0a5cc9403b284342f817fa25563218f",
+    "index.html": "sha256:f8e7fb544217ec6ef611ebf5565675a7cb02f0f72116847cfc8e4b62c4e20459"
+  },
+  "artifactHash": "sha256:88acc4b43c1765b28ff72203585c98448be94ae1adc0b84512d04dbfed18bf85",
+  "walletOrigins": [
+    "http://localhost:3370"
+  ],
+  "requestedCapabilities": [],
+  "subresourceIntegrity": {
+    "face.js": "sha256-ki7PWt/6A7tT5ztxa6KlIrClzJQDsoQ0L4F/olVjIY8=",
+    "face.css": "sha256-3UA8/aEVwad9wk5avDx+A4rhkHYUz/ool7/ycoAQ830="
+  }
+}

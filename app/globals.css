@@ -1233,6 +1233,18 @@ button {
   color: var(--muted);
   font-size: 0.85rem;
 }
+.native-entrance {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 20px;
+  overflow-wrap: anywhere;
+}
+.native-entrance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 .loyalty-section {
   display: grid;
   gap: 12px;

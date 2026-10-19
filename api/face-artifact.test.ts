@@ -163,23 +163,28 @@ describe("pinned artifact verification", () => {
 });
 
 describe("pinned emitted Studio artifact fixture", () => {
-  // The e2e fixture is the Studio emitter's real output; this proves the
-  // wallet's independent verification accepts exactly it, and nothing edited.
+  // The e2e fixtures are the Studio emitters' real output; this proves the
+  // wallet's independent verification accepts exactly them, and nothing
+  // edited: the product-face suite's face, and the Ticket face Studio H2
+  // emitted for the P4 native-entrance fixture (kept in its own root so the
+  // product-face suite's pin is unchanged).
   const { existsSync, readdirSync, readFileSync } =
     jest.requireActual<typeof import("node:fs")>("node:fs");
-  const root = `${process.cwd()}/e2e/fixtures/product-face`;
-  const pinned = existsSync(root)
-    ? readdirSync(root).flatMap((app) =>
-        readdirSync(`${root}/${app}`).flatMap((version) =>
-          readdirSync(`${root}/${app}/${version}`).map((hash) => ({
-            app,
-            version,
-            hash,
-            dir: `${root}/${app}/${version}/${hash}`,
-          })),
-        ),
-      )
-    : [];
+  const pinned = ["product-face", "p4-ticket-face"].flatMap((name) => {
+    const root = `${process.cwd()}/e2e/fixtures/${name}`;
+    return existsSync(root)
+      ? readdirSync(root).flatMap((app) =>
+          readdirSync(`${root}/${app}`).flatMap((version) =>
+            readdirSync(`${root}/${app}/${version}`).map((hash) => ({
+              app,
+              version,
+              hash,
+              dir: `${root}/${app}/${version}/${hash}`,
+            })),
+          ),
+        )
+      : [];
+  });
 
   it.each(pinned.map((item) => [item.app, item]))(
     "verifies %s and refuses a one-byte change",

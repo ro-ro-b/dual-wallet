@@ -1,0 +1,12 @@
+{
+  "schema": "tig-ticket-face-content-v1",
+  "kind": "tickets",
+  "brandId": "harbour-nights",
+  "programmeId": "harbour-nights-events",
+  "version": "1.0.0",
+  "name": "Harbour Nights",
+  "shortName": "Harbour",
+  "description": "A fictional event brand for the local Tickets fixture.",
+  "headline": "Your Harbour Nights tickets (fictional).",
+  "introduction": "A local fixture: every event, ticket and account here is made up."
+}

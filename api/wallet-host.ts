@@ -9,6 +9,7 @@ import {
   type HostConfigurationState,
   type WalletHostConfiguration,
 } from "@/api/host-configuration";
+import type { ProductFaceBinding } from "@/api/product-face-binding";
 import { isHandoverEntryPath } from "@/app/_domain/navigation";
 import { taskPathFromPathname } from "@/app/_domain/product-face";
 import {
@@ -18,10 +19,12 @@ import {
   hostNavigationHrefs,
   hostTokenCss,
   journeysOfTask,
+  nativeHostJourneys,
   type HostHomeView,
   type HostJourney,
   type HostJourneys,
   type HostPresentation,
+  type NativeHostJourney,
 } from "@/app/_domain/wallet-host";
 
 /**
@@ -195,6 +198,33 @@ export function loyaltyServedBy(binding: { slug: string; loyalty: unknown }) {
     hostFaceEnabled(binding.slug) &&
     binding.loyalty !== null
   );
+}
+
+/**
+ * The native journeys this face serves here, when they are all it serves: a
+ * configured host, one of its own faces serving Tickets or Loyalty, and no
+ * enabled framed journey (registration, My products, service progress, quote
+ * decisions, transfer) that this binding backs. Such a face's entrance, help
+ * and end routes are wallet-native pages as well: a frame of it could open
+ * nothing, so none is rendered and its artifact is never read. Undefined for
+ * the generic wallet and for any face with a framed journey: its frame,
+ * unchanged.
+ */
+export function nativeOnlyJourneys(
+  binding: ProductFaceBinding,
+): NativeHostJourney[] | undefined {
+  const host = walletHost();
+  if (host.status !== "active") return undefined;
+  const served = nativeHostJourneys.filter((journey) =>
+    journey === "tickets" ? ticketsServedBy(binding) : loyaltyServedBy(binding),
+  );
+  const framed = hostJourneys.some(
+    (journey) =>
+      !(nativeHostJourneys as readonly HostJourney[]).includes(journey) &&
+      host.configuration.journeys[journey] &&
+      bindingBacksJourney(binding, journey),
+  );
+  return served.length && !framed ? served : undefined;
 }
 
 /** Where a request for a page a configured host does not serve is sent. */
