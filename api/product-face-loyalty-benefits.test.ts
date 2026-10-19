@@ -229,6 +229,8 @@ interface Reward {
 }
 
 const BASE32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+/** The runtime's own record of one request operation (the r20 echo). */
+type Recorded = { binding: Record<string, unknown>; requestHash: string };
 
 /**
  * A FICTIONAL programme world: each member's issuer-owned canonical record
@@ -274,7 +276,7 @@ function world() {
         pass: false,
         pairs: [] as Array<Record<string, unknown>>,
         reward: null as Reward | null,
-        requests: new Map<string, Record<string, unknown>>(),
+        requests: new Map<string, Recorded>(),
       },
     ]),
   ) as Record<
@@ -284,7 +286,7 @@ function world() {
       pass: boolean;
       pairs: Array<Record<string, unknown>>;
       reward: Reward | null;
-      requests: Map<string, Record<string, unknown>>;
+      requests: Map<string, Recorded>;
     }
   >;
 
@@ -732,7 +734,20 @@ function world() {
             "request_redemption",
           );
           reward.requestEvent = eventId;
-          member.requests.set(operationId, binding(reward));
+          member.requests.set(operationId, {
+            binding: binding(reward),
+            requestHash: sha(
+              canonicalJson({
+                operation,
+                operationId,
+                target: {
+                  model_id: "harbour-makers",
+                  object_id: MEMBERS[who].canon,
+                },
+                input,
+              }),
+            ),
+          });
           return [
             200,
             {
@@ -755,6 +770,7 @@ function world() {
               {
                 ok: true,
                 status: "not_received",
+                operation_id: operationId,
                 accounting: zero("operation_not_received"),
               },
             ];
@@ -768,7 +784,9 @@ function world() {
                 : reward.recording
                   ? "confirmation_recording"
                   : "requested",
-              binding: held,
+              operation_id: operationId,
+              request_hash: held.requestHash,
+              binding: held.binding,
               canonical: canonicalRead(who),
               valid_until: reward.validUntil,
               ...chainOf(reward, "action"),
@@ -1651,6 +1669,90 @@ describe("each reward step is the very next change after the one before", () => 
     const answer = await benefitsOf(browser);
     expect(answer.benefits).toBeNull();
     expect(answer.unconfirmed).toBe(true);
+  });
+});
+
+describe("the benefits read is exactly this binding's programme, and a status exactly this operation's", () => {
+  it("a benefits answer naming another programme supplies nothing: no view, no prepare, no dispatch", async () => {
+    const browser = await granted();
+    // The canonical record, grant and allocation are this member's own and
+    // valid; only the answer's programme block is another programme's.
+    rewrite = (operation, [status, body]) =>
+      operation === "loyalty.benefits.read"
+        ? [
+            status,
+            {
+              ...(body as Record<string, unknown>),
+              programme: {
+                programme_id: "ANOTHER-PROGRAMME",
+                revision_hash: sha("another programme's revision"),
+              },
+            },
+          ]
+        : [status, body];
+    const read = await browser.loyalty({ transition: "benefits" });
+    expect(read.status).toBe(502);
+    expect(read.body.benefits).toBeUndefined();
+    const prepared = await browser.loyalty({
+      transition: "redeem_prepare",
+      benefit_id: BENEFIT,
+      grant_action_id: String(w.members.a.reward!.grant.action_id),
+    });
+    expect(prepared.status).toBe(502);
+    expect(prepared.body.prepared).toBeUndefined();
+    expect(writes("loyalty.redemption.request")).toHaveLength(0);
+    expect(
+      (await browser.reopen().loyalty({ transition: "membership" })).status,
+    ).toBe(200);
+    expect(w.stateOf("a")).toBe("Benefit eligible");
+  });
+
+  it.each([
+    [
+      "another operation's id",
+      { operation_id: "loy-0123456789abcdef01234567" },
+    ],
+    ["another request's hash", { request_hash: sha("another request") }],
+    ["no operation echo", { operation_id: undefined, request_hash: undefined }],
+  ])(
+    "a status answer with %s is not this operation's, however exact its grant",
+    async (_label, echo) => {
+      const browser = await granted();
+      const prepared = await prepareRequest(browser);
+      await submitPrepared(browser, prepared);
+      rewrite = (operation, [status, body]) =>
+        operation === "loyalty.redemption.status"
+          ? [status, { ...(body as Record<string, unknown>), ...echo }]
+          : [status, body];
+      expect(await statusOf(browser, operationOf(prepared))).toEqual(
+        expect.objectContaining({ status: "unconfirmed" }),
+      );
+    },
+  );
+
+  it("a not_received about another operation never closes this one", async () => {
+    const browser = await granted();
+    const prepared = await prepareRequest(browser);
+    await submitPrepared(browser, prepared, { lose: true });
+    const later = Date.now() + 10 * 60_000;
+    rewrite = (operation, [status, body]) =>
+      operation === "loyalty.redemption.status"
+        ? [
+            200,
+            {
+              ok: true,
+              status: "not_received",
+              operation_id: "loy-0123456789abcdef01234567",
+              accounting: { dual_writes: 0, reason: "operation_not_received" },
+            },
+          ]
+        : [status, body];
+    jest.spyOn(Date, "now").mockReturnValue(later);
+    expect(await statusOf(browser, operationOf(prepared))).toEqual(
+      expect.objectContaining({ status: "unknown" }),
+    );
+    // Still listed (possibly sent): it was never closed.
+    expect((await benefitsOf(browser.reopen())).redemptions).toHaveLength(1);
   });
 });
 

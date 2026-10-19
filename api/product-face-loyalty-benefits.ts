@@ -265,7 +265,11 @@ async function proveBenefits(
   );
   if (!called.ok) return bare(called.failure);
   const read = called.answer.reached
-    ? parseBenefitsRead(called.answer.status, called.answer.body)
+    ? parseBenefitsRead(
+        called.answer.status,
+        called.answer.body,
+        rules.programmeId,
+      )
     : undefined;
   if (!read) return unavailable();
   const proof = proofContext(context, rules);
@@ -661,7 +665,7 @@ export async function redemptionStatus(
   const entry = ownRedemptions(context).find(
     (item) => item.operationId === operationId,
   );
-  if (!entry || !entry.evidenceHash || !entry.benefitId) {
+  if (!entry || !entry.evidenceHash || !entry.benefitId || !entry.requestHash) {
     return fail("unknown_operation", 404);
   }
   const called = await call(
@@ -684,8 +688,11 @@ export async function redemptionStatus(
   const answer = parseRedemptionStatus(
     called.answer.status,
     called.answer.body,
+    { operationId: entry.operationId, requestHash: entry.requestHash },
   );
   if (answer.kind === "unknown") return result("unknown");
+  // Another operation's record, however exact its grant, is not this one's.
+  if (answer.kind === "foreign") return result("unconfirmed");
   if (answer.kind === "not_received") {
     if (Date.now() - latestAssertion(entry) <= NOT_RECEIVED_AFTER_MS) {
       return result("unknown");

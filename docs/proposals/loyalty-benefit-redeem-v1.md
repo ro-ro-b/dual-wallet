@@ -161,7 +161,10 @@ New `ActionReceipt.semantic` values, all `action_name: "update"`:
 ```
 
 `reward` is the record's latest grant and what followed it, and nothing
-earlier.
+earlier. `programme.programme_id` must be exactly the binding's
+`programmeId`, as `loyalty.programme.read` requires. A read naming another
+programme is unavailable: none of its terms, progress or revision is shown or
+bound into a request.
 
 ### 4.2 `loyalty.redemption.request` (one Dual write by the issuer, on the member's assertion)
 
@@ -180,15 +183,22 @@ idempotent by `operationId`, as `loyalty.activity.submit` is
 
 ### 4.3 `loyalty.redemption.status` (read, the original operation only)
 
-`operationId` is the original request's; `input: {}`.
+`operationId` is the original request's; `input: {}`. As in r20's echoed
+binding ([runtime-write-status-r20](./runtime-write-status-r20.md)), every
+answer echoes `operation_id`. `requested`, `confirmation_recording` and
+`confirmed` also echo the `request_hash` the runtime recorded for that
+operation. An answer is this operation's outcome only when both equal the
+journalled operation id and request hash: the same grant is not enough. A
+committed answer for another operation is unconfirmed, and a `not_received`
+naming another operation (or none) is unknown and closes nothing.
 
-| `status`                 | Body                                                                                                                   |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `requested`              | `binding` (the four ids of §4.2), `canonical`, `grant`, `allocation`, `action` (request), `valid_until`                |
-| `confirmation_recording` | as `requested`: the partner's confirmation is recorded by the programme but not yet written to Dual (APPLICATION)      |
-| `confirmed`              | as `requested`, plus `confirmation`, and `settlement` once recorded                                                    |
-| `not_received`           | `accounting {0, "operation_not_received"}`: the runtime never accepted it and, its assertion having expired, never can |
-| `outcome_unknown` (202)  | `accounting {"unknown", "outcome_unknown"}`                                                                            |
+| `status`                 | Body                                                                                                                                    |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `requested`              | `operation_id`, `request_hash`, `binding` (the four ids of §4.2), `canonical`, `grant`, `allocation`, `action` (request), `valid_until` |
+| `confirmation_recording` | as `requested`: the partner's confirmation is recorded by the programme but not yet written to Dual (APPLICATION)                       |
+| `confirmed`              | as `requested`, plus `confirmation`, and `settlement` once recorded                                                                     |
+| `not_received`           | `operation_id`, `accounting {0, "operation_not_received"}`: the runtime never accepted it and, its assertion having expired, never can  |
+| `outcome_unknown` (202)  | `accounting {"unknown", "outcome_unknown"}`                                                                                             |
 
 ### 4.4 `loyalty.redemption.reference` (read, explicit, member only)
 
@@ -256,6 +266,23 @@ canonical state. It is shown as available only for `available` with
 `remaining` > 0, as unavailable only for `exhausted`, and otherwise as "can't
 be confirmed".
 
+**Programme and revision.**
+
+- The programme id is proven twice:
+  - the answer's `programme_id` is the binding's (§4.1);
+  - the canonical `custom.programmeId` is too (loyalty-join-earn-v1 §5).
+- The `revision_hash` is the programme's APPLICATION record of the record's
+  governing revision. The wallet can't prove it: the binding names no
+  revision, and the canonical map carries none.
+- The wallet checks its form and binds it into the request's binding and
+  request hashes. A request is therefore for exactly the revision the
+  member saw, and its status must echo the same.
+- Studio refuses a request whose revision is not the record's governing one
+  (`loyalty_reward_changed`, §2 (4)).
+- The wallet does not compare it with `loyalty.programme.read`'s revision.
+  That revision is the catalog's current one, which may legitimately differ
+  from an existing member's governing revision.
+
 **Per benefit, the wallet shows exactly one of:**
 
 | Status                   | When                                                                        |
@@ -312,7 +339,8 @@ A member request is the same two-step durable submission as an activity
 The prepared or sent request is listed and only status-read under its
 original id, across a lost or whole-lost answer, an exception after the
 dispatch, a 401 or 403, a reload or a new sign-in. A status answer counts
-only if its `binding` hashes to the journalled binding hash.
+only if it echoes exactly this operation's id and recorded request hash
+(§4.3), and its `binding` hashes to the journalled binding hash.
 
 A second request for the same grant is refused (`redemption_in_progress`)
 while one is unresolved. A refused request (an exact listed zero-write
@@ -354,7 +382,14 @@ is left to confirm). `not_received` follows the same bound as an activity.
    reference. This is Studio's existing role session, untouched by the
    wallet.
 6. Fulfilment, delivery and partner-reported failure: out of scope (§2 (7)).
-7. Everything still open in loyalty-join-earn-v1 §8.
+7. **Governing revision.** The revision a reward's terms and progress come
+   from is not provable by the wallet (§5, programme and revision). Making
+   it provable would need Studio to publish the governing revision where
+   the wallet can verify it, such as a provable field or a signed
+   statement. That is a later contract decision, not a new field now.
+8. The r20 operation echo on `loyalty.redemption.status` (§4.3), in the
+   Studio runtime leg.
+9. Everything still open in loyalty-join-earn-v1 §8.
 
 ## 10. Wallet implementation (source only)
 
@@ -399,6 +434,10 @@ is left to confirm). `not_received` follows the same bound as an activity.
     - expired, held, recording and stranded rewards;
     - another member's or another record's canonical;
     - the reference kept out of the journal and cookies.
+    - a benefits answer naming another programme (no view, no prepare, no
+      dispatch);
+    - a status answer for another operation, another request hash or with
+      no echo, and a `not_received` naming another operation.
   - `app/_domain/loyalty-benefits.test.ts`.
   - `app/_components/products/loyalty-view.test.tsx`.
 - **Browser (FICTIONAL)**, `e2e/loyalty.spec.ts`: at phone width from the

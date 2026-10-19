@@ -359,10 +359,15 @@ function parseChain(
   };
 }
 
-/** §4.1, with its exact zero-write accounting. */
+/**
+ * §4.1, with its exact zero-write accounting, for exactly the binding's own
+ * programme (as parseProgrammeRead: another programme's terms, progress or
+ * revision are never this one's).
+ */
 export function parseBenefitsRead(
   httpStatus: number,
   body: unknown,
+  programmeId: string,
 ): BenefitsRead | undefined {
   if (
     httpStatus !== 200 ||
@@ -389,7 +394,7 @@ export function parseBenefitsRead(
     accounting.reason !== "benefits_read" ||
     !record(programme) ||
     !exactKeys(programme, ["programme_id", "revision_hash"]) ||
-    typeof programme.programme_id !== "string" ||
+    programme.programme_id !== programmeId ||
     typeof programme.revision_hash !== "string" ||
     !HASH.test(programme.revision_hash) ||
     !canonical ||
@@ -543,13 +548,21 @@ export type RedemptionStatusAnswer =
       canonical: CanonicalRead;
       chain: Omit<RewardChain, "benefitId">;
     }
+  /** A committed answer that does not echo exactly this operation. */
+  | { kind: "foreign" }
   | { kind: "not_received" }
   | { kind: "unknown" };
 
-/** §4.3. */
+/**
+ * §4.3, for exactly one original operation: every answer echoes its
+ * `operation_id`, and a committed one the `request_hash` the runtime
+ * recorded for it (the r20 echo rule). The same grant is not enough: only
+ * this operation's own record is its outcome.
+ */
 export function parseRedemptionStatus(
   httpStatus: number,
   body: unknown,
+  expected: { operationId: string; requestHash: string },
 ): RedemptionStatusAnswer {
   if (!record(body)) return { kind: "unknown" };
   const accounting = parseAccounting(body.accounting);
@@ -558,8 +571,10 @@ export function parseRedemptionStatus(
     body.ok === true &&
     body.status === "not_received"
   ) {
+    // Never received: only ever about the operation it names.
     return accounting?.dualWrites === 0 &&
-      accounting.reason === "operation_not_received"
+      accounting.reason === "operation_not_received" &&
+      body.operation_id === expected.operationId
       ? { kind: "not_received" }
       : { kind: "unknown" };
   }
@@ -587,6 +602,12 @@ export function parseRedemptionStatus(
     binding.benefitId !== chain.allocation.benefitId
   ) {
     return { kind: "unknown" };
+  }
+  if (
+    body.operation_id !== expected.operationId ||
+    body.request_hash !== expected.requestHash
+  ) {
+    return { kind: "foreign" };
   }
   return {
     kind,

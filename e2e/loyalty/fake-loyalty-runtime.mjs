@@ -551,7 +551,18 @@ async function operate(body, claims) {
         semantic: "request_redemption",
       };
       reward.requestEvent = eventId;
-      state.requests.set(body.operationId, bindingOf(reward));
+      // The runtime's own record of this operation (r20 echo).
+      state.requests.set(body.operationId, {
+        binding: bindingOf(reward),
+        requestHash: sha(
+          canonicalJson({
+            operation: body.operation,
+            operationId: body.operationId,
+            target: body.target,
+            input: body.input,
+          }),
+        ),
+      });
       return [
         200,
         {
@@ -573,6 +584,7 @@ async function operate(body, claims) {
           {
             ok: true,
             status: "not_received",
+            operation_id: body.operationId,
             accounting: zero("operation_not_received"),
           },
         ];
@@ -582,7 +594,9 @@ async function operate(body, claims) {
         {
           ok: true,
           status: state.reward.confirmation ? "confirmed" : "requested",
-          binding: held,
+          operation_id: body.operationId,
+          request_hash: held.requestHash,
+          binding: held.binding,
           canonical: await canonicalRead(),
           valid_until: state.reward.validUntil,
           ...chainOf(state.reward, "action"),

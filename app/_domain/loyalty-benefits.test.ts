@@ -61,16 +61,29 @@ describe("answers", () => {
   });
 
   it("not received counts only with its exact zero-write accounting", () => {
-    expect(
-      parseRedemptionStatus(200, {
-        ok: true,
-        status: "not_received",
-        accounting: zero("operation_not_received"),
-      }),
-    ).toEqual({ kind: "not_received" });
-    expect(
-      parseRedemptionStatus(200, { ok: true, status: "not_received" }),
-    ).toEqual({ kind: "unknown" });
+    const expected = {
+      operationId: "loy-0123456789abcdef01234567",
+      requestHash: `sha256:${"b".repeat(64)}`,
+    };
+    const notReceived = {
+      ok: true,
+      status: "not_received",
+      operation_id: expected.operationId,
+      accounting: zero("operation_not_received"),
+    };
+    expect(parseRedemptionStatus(200, notReceived, expected)).toEqual({
+      kind: "not_received",
+    });
+    // About another operation, or naming none: never this one's.
+    for (const body of [
+      { ...notReceived, operation_id: "loy-fedcba9876543210fedcba98" },
+      { ...notReceived, operation_id: undefined },
+      { ok: true, status: "not_received", operation_id: expected.operationId },
+    ]) {
+      expect(parseRedemptionStatus(200, body, expected)).toEqual({
+        kind: "unknown",
+      });
+    }
   });
 
   it("a reference is exactly Studio's 8-letter form, and a not-current answer carries none", () => {
