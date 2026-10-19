@@ -759,6 +759,8 @@
     "homeNavigation": "Wallet",
     "signIn": "Sign in",
     "createAccount": "Create an account",
+    "signingOut": "Signing out…",
+    "signOutFailed": "We couldn't sign you out. You're still signed in; try again.",
     "journeysLabel": "What you can do here",
     "journeys": {
       "registration": "Register a product",

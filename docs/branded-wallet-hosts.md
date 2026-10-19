@@ -180,9 +180,26 @@ uses those tokens:
 ## Home and navigation
 
 - `/` renders the host's home: headline, introduction, the primary journey
-  and every other enabled journey, sign-in links when signed out and the
-  configured navigation when signed in. A signed-in visitor with no return
-  path lands there.
+  and every other enabled journey. A signed-in visitor with no return path
+  lands there.
+- **The home's header.** Without a session cookie it is the public home: sign
+  in and create an account, and nothing is read. A visit carrying the cookie
+  mounts one provider tree for the home's islands (the header's account and
+  Today), sharing one session read and one cache. The cookie is never
+  identity: the header shows nothing until the session read answers.
+  - A live session gets the configured navigation, the verified account (the
+    wallet shell's own profile menu: name, email, account address,
+    controller, "Manage profile") and "Sign out".
+  - A cookie naming no live session (forged, expired, revoked) gets the
+    public sign-in, as Today does.
+  - "Sign out" withholds the account, Today and the membership card at once,
+    from the provider's "logout" notice and before the session is revoked;
+    nothing private is read after it. It then revokes the session, which
+    clears every cached account query, and re-renders `/` as the public
+    home. The next account to sign in starts from an empty cache, and a
+    fresh reopen reads afresh.
+  - A sign-out that fails says so and keeps the account. Today stays
+    withheld until the home is opened again.
 - **Today (Tickets hosts only).** When the host enabled Tickets, a visit
   carrying a session cookie mounts a client island under the headline for
   exactly the face the Tickets journey link names. The cookie only decides
@@ -200,10 +217,10 @@ uses those tokens:
   reclassifies the tickets already read, and never fetches, retries or
   writes. It never pages on its own, says when more tickets
   may exist, and claims nothing for a past or undated ticket. Empty-but-more,
-  none and unavailable are distinct; nothing is retried automatically. Every
-  session end (logout, expiry, account change) remounts it after the
-  provider clears the account's queries. A host without Tickets, and the
-  signed-out home, are unchanged.
+  none and unavailable are distinct; nothing is retried automatically. An
+  expiry or account change remounts it after the provider clears the
+  account's queries; a sign-out ends it for good (above). A host without
+  Tickets, and the signed-out home, are unchanged.
 - The shell shows exactly the configured navigation entries, in order.
 - The shell's mark and name are the link back to the host's Home (`/`), in
   the desktop sidebar and the mobile top bar, named "<brand name> home". It

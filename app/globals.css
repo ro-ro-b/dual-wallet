@@ -2302,6 +2302,7 @@ html[data-wallet-host] .button-primary {
   background: var(--surface-subtle);
 }
 .host-home-header {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2331,6 +2332,54 @@ html[data-wallet-host] .button-primary {
 .host-home-link:focus-visible {
   outline: 3px solid var(--brand-strong);
   outline-offset: 2px;
+}
+button.host-home-link {
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+/* The signed-in header: navigation, then the verified account and sign-out. */
+.host-home-session {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.host-home-account {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.host-home-account .account-profile-wrap {
+  position: static;
+  min-width: 0;
+  max-width: min(260px, 100%);
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+/* In the header the profile opens downwards, under the header's own right
+   edge: inside the viewport wherever the header wraps the chip. */
+.host-home-account .account-profile-popover {
+  top: calc(100% + 8px);
+  right: clamp(16px, 5vw, 72px);
+  bottom: auto;
+  left: auto;
+  width: min(320px, calc(100vw - 32px));
+}
+.host-home-session .alert {
+  flex-basis: 100%;
+}
+.host-home-status {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 700;
 }
 .host-home-main {
   width: min(880px, 100%);

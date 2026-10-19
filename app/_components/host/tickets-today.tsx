@@ -253,14 +253,24 @@ export function TicketsTodaySection({
   // provider clearing the account's queries; reading afresh after it means a
   // read never belongs to, or is cancelled with, the session that ended.
   const [generation, setGeneration] = useState(0);
+  // A sign-out is final for this island: from its notice (before the session
+  // is revoked) nothing private is shown or read again; the home then
+  // re-renders as the public one.
+  const [signedOut, setSignedOut] = useState(false);
   useEffect(
-    () => onSessionEnd(() => setGeneration((value) => value + 1)),
+    () =>
+      onSessionEnd((reason) =>
+        reason === "logout"
+          ? setSignedOut(true)
+          : setGeneration((value) => value + 1),
+      ),
     [onSessionEnd],
   );
   // The session read's own pending state (the same deduplicated query the
   // provider holds): pending on the server render and on the first client
   // render alike, so both render nothing and nothing private is guessed.
   const session = useQuery(sessionQueryOptions());
+  if (signedOut) return null;
   if (session.isPending) return null;
   if (!isAuthenticated || !wallet) {
     return (

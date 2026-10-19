@@ -110,12 +110,21 @@ export function LoyaltyTodaySection({
   const t = useTranslations("host.loyalty");
   const { wallet, isAuthenticated, onSessionEnd } = useSession();
   const [generation, setGeneration] = useState(0);
+  // As for Today's tickets: a sign-out is final for this card.
+  const [signedOut, setSignedOut] = useState(false);
   useEffect(
-    () => onSessionEnd(() => setGeneration((value) => value + 1)),
+    () =>
+      onSessionEnd((reason) =>
+        reason === "logout"
+          ? setSignedOut(true)
+          : setGeneration((value) => value + 1),
+      ),
     [onSessionEnd],
   );
   const session = useQuery(sessionQueryOptions());
-  if (session.isPending || !isAuthenticated || !wallet) return null;
+  if (signedOut || session.isPending || !isAuthenticated || !wallet) {
+    return null;
+  }
   return (
     <section className="tickets-today" aria-labelledby="loyalty-today">
       <h2 id="loyalty-today">{t("title")}</h2>

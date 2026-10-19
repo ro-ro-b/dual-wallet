@@ -247,7 +247,7 @@ describe("HostHome", () => {
       .map((link) => [link.textContent, link.getAttribute("href")]);
 
   it("renders each host's copy, primary journey and other journeys", () => {
-    const morrow = render(<HostHome home={morrowHome} signedIn={false} />);
+    const morrow = render(<HostHome home={morrowHome} />);
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
       MORROW.home.headline,
     );
@@ -264,12 +264,19 @@ describe("HostHome", () => {
     );
     morrow.unmount();
 
-    render(<HostHome home={tidewellHome} signedIn />);
+    // Signed in, the header is the account island's (host-home-account):
+    // no public sign-in beside it.
+    render(
+      <HostHome
+        home={tidewellHome}
+        account={<span data-testid="account">account</span>}
+      />,
+    );
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
       TIDEWELL.home.headline,
     );
+    expect(screen.getByTestId("account")).toBeTruthy();
     expect(links()).toEqual([
-      ["Products", "/products"],
       ["See my products", "/products/tidewell-care/products"],
     ]);
     expect(document.querySelector("img")?.getAttribute("src")).toBe(

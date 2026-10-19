@@ -63,7 +63,7 @@ function renderHost(configuration: HostDocument) {
     themeSwitch: screen.queryByRole("button", { name: "Change color theme" }),
   };
   shell.unmount();
-  const page = render(<HostHome home={home} signedIn={false} />);
+  const page = render(<HostHome home={home} />);
   const homeSeen = {
     headline: screen.getByRole("heading", { level: 1 }).textContent,
     primary: screen

@@ -10,7 +10,7 @@ import {
   // @ts-expect-error -- plain ES module shared with the fixture runner
 } from "./tickets-home/environment.mjs";
 
-const { apiOrigin } = fixtureEnvironment();
+const { apiOrigin, origin } = fixtureEnvironment();
 const LIST = `/products/${SLUG}/tickets`;
 const detail = (id: string) => `${LIST}/${id}`;
 
@@ -509,4 +509,165 @@ test("signing out clears the private tickets", async ({ page }) => {
   await expect(page.getByText("Harbour Night", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
   expect(seen.ticketReads).toEqual([]);
+});
+
+// ------------------------------------------------------- the Home's account
+const homeNav = (page: Page) =>
+  page.getByRole("navigation", { name: "Wallet" });
+const PRIVATE_A = [
+  "Harbour Night",
+  "Lantern Walk",
+  "Pier Concert",
+  "Dawn Swim",
+];
+
+test("at phone width, from the keyboard: the Home shows the verified account, signs out at once to the public Home, and the next account never sees the last one's", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  const seen = watch(page);
+  await page.goto("/login");
+  await signIn(page);
+  await expect(page).toHaveURL("/");
+  await expect(
+    yourTickets(page).getByRole("region", { name: "Today" }).getByRole("link"),
+  ).toContainText("Harbour Night");
+  await expect(
+    homeNav(page).getByRole("link", { name: "Inventory" }),
+  ).toBeVisible();
+
+  // The verified account, from the session read: its profile, by keyboard.
+  const profile = page.getByRole("button", { name: "Open user profile" });
+  await tabTo(page, profile);
+  await page.keyboard.press("Enter");
+  const popover = page.getByRole("region", { name: "User profile" });
+  await expect(popover).toContainText("face-e2e@example.com");
+  await noHorizontalOverflow(page);
+  await page.keyboard.press("Escape");
+  await expect(popover).toHaveCount(0);
+  await expect(profile).toBeFocused();
+
+  // Sign out by keyboard. While the sign-out is still in flight, nothing
+  // private is shown any more and nothing private is read.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/session/logout", async (route) => {
+    await held;
+    await route.continue();
+  });
+  const signOut = page.getByRole("button", { name: "Sign out" });
+  await tabTo(page, signOut);
+  const readsBefore = seen.ticketReads.length;
+  await page.keyboard.press("Enter");
+  for (const title of PRIVATE_A) {
+    await expect(page.getByText(title, { exact: true })).toHaveCount(0);
+  }
+  await expect(
+    page.getByRole("button", { name: "Open user profile" }),
+  ).toHaveCount(0);
+  await expect(page.getByText("face-e2e@example.com")).toHaveCount(0);
+  expect(seen.ticketReads.length).toBe(readsBefore);
+  release();
+
+  // Signed out: the public branded Home, with an honest sign-in.
+  await expect(page).toHaveURL("/");
+  await expect(
+    homeNav(page).getByRole("link", { name: "Sign in" }),
+  ).toBeVisible();
+  await expect(
+    homeNav(page).getByRole("link", { name: "Create an account" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+  await expect(yourTickets(page)).toHaveCount(0);
+  await noHorizontalOverflow(page);
+  expect(seen.ticketReads.length).toBe(readsBefore);
+
+  // The second account signs in from the Home: its own account and tickets.
+  await homeNav(page).getByRole("link", { name: "Sign in" }).click();
+  await expect(page).toHaveURL("/login");
+  await signIn(page, FICTIONAL_ACCOUNTS.secondHolder);
+  await expect(page).toHaveURL("/");
+  await expect(
+    yourTickets(page)
+      .getByRole("region", { name: "Coming up" })
+      .getByRole("link"),
+  ).toContainText("Second Holder Night");
+  for (const title of PRIVATE_A) {
+    await expect(page.getByText(title, { exact: true })).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: "Open user profile" }).click();
+  await expect(
+    page.getByRole("region", { name: "User profile" }),
+  ).toContainText("face-e2e-b@example.com");
+  await expect(page.getByText("face-e2e@example.com")).toHaveCount(0);
+
+  // A fresh reopen in a new tab: the second account's, read afresh.
+  await page.close();
+  const reopened = await context.newPage();
+  await reopened.setViewportSize({ width: 360, height: 780 });
+  const again = watch(reopened);
+  await reopened.goto("/");
+  await expect(
+    yourTickets(reopened)
+      .getByRole("region", { name: "Coming up" })
+      .getByRole("link"),
+  ).toContainText("Second Holder Night");
+  for (const title of PRIVATE_A) {
+    await expect(reopened.getByText(title, { exact: true })).toHaveCount(0);
+  }
+  await reopened.getByRole("button", { name: "Open user profile" }).click();
+  await expect(
+    reopened.getByRole("region", { name: "User profile" }),
+  ).toContainText("face-e2e-b@example.com");
+  await noHorizontalOverflow(reopened);
+  expect(seen.problems).toEqual([]);
+  expect(again.problems).toEqual([]);
+});
+
+test("a forged or ended session cookie is not an identity: the Home stays public, with an honest sign-in", async ({
+  page,
+  context,
+}) => {
+  const publicHeader = async () => {
+    await expect(
+      homeNav(page).getByRole("link", { name: "Sign in" }),
+    ).toBeVisible();
+    await expect(
+      homeNav(page).getByRole("link", { name: "Create an account" }),
+    ).toBeVisible();
+    for (const entry of ["Inventory", "Settings"]) {
+      await expect(
+        homeNav(page).getByRole("link", { name: entry }),
+      ).toHaveCount(0);
+    }
+    await expect(
+      page.getByRole("button", { name: "Open user profile" }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+    await expect(page.getByText("Sign in to see your tickets.")).toBeVisible();
+  };
+  await context.addCookies([
+    {
+      name: "smarttoken_viewer",
+      value: "not-a-real-session",
+      url: origin,
+    },
+  ]);
+  const seen = watch(page);
+  await page.goto("/");
+  await publicHeader();
+  expect(seen.ticketReads).toEqual([]);
+
+  // A real session that ended upstream reads the same.
+  await context.clearCookies();
+  await page.goto("/login");
+  await signIn(page);
+  await expect(
+    page.getByRole("button", { name: "Open user profile" }),
+  ).toBeVisible();
+  await fixture({ expireSessions: true });
+  await page.reload();
+  await publicHeader();
+  await expect(page.getByText("face-e2e@example.com")).toHaveCount(0);
 });

@@ -4,20 +4,40 @@ import { buttonClass } from "@/app/_components/design-system/button";
 import { Brand } from "@/app/_components/design-system/brand";
 import type { HostHomeView } from "@/app/_domain/wallet-host";
 
+/** The public home's navigation: an honest way to sign in or join. */
+export function HostHomeSignedOutNav() {
+  const t = useTranslations("host");
+  return (
+    <nav className="host-home-nav" aria-label={t("homeNavigation")}>
+      <Link href="/login" className="host-home-link">
+        {t("signIn")}
+      </Link>
+      <Link href="/register" className="host-home-link">
+        {t("createAccount")}
+      </Link>
+    </nav>
+  );
+}
+
 /**
  * A branded host's home: its validated headline and introduction, its primary
  * journey and its other enabled journeys. Only enabled, backed journeys and
  * allowlisted navigation entries reach it. It shows nothing private itself:
- * the only private content is the `today` island, which reads through the
- * Tickets BFF after its own session read.
+ * the only private content is in the `account` and `today` islands, which
+ * show anything only after their own session read.
  */
 export function HostHome({
   home,
-  signedIn,
+  account = null,
   today = null,
 }: {
   home: HostHomeView;
-  signedIn: boolean;
+  /**
+   * The header's signed-in navigation, verified account and sign-out (a
+   * client island: app/_components/host/host-home-account.tsx); null on the
+   * public home, which offers sign-in instead.
+   */
+  account?: React.ReactNode;
   /**
    * The signed-in Today section (a client island that reads the holder's
    * own tickets after its session read); null on the public home.
@@ -25,29 +45,11 @@ export function HostHome({
   today?: React.ReactNode;
 }) {
   const t = useTranslations("host");
-  const nav = useTranslations("nav");
   return (
     <div className="host-home">
       <header className="host-home-header">
         <Brand host={home.brand} />
-        <nav className="host-home-nav" aria-label={t("homeNavigation")}>
-          {signedIn ? (
-            home.navigation.map(({ entry, href }) => (
-              <Link key={entry} href={href} className="host-home-link">
-                {nav(entry)}
-              </Link>
-            ))
-          ) : (
-            <>
-              <Link href="/login" className="host-home-link">
-                {t("signIn")}
-              </Link>
-              <Link href="/register" className="host-home-link">
-                {t("createAccount")}
-              </Link>
-            </>
-          )}
-        </nav>
+        {account ?? <HostHomeSignedOutNav />}
       </header>
       <main id="main-content" className="host-home-main">
         <h1 className="host-home-headline">{home.headline}</h1>

@@ -27,7 +27,9 @@ jest.mock("next/navigation", () => ({
   redirect: (to: string) => redirect(to),
 }));
 
+import { HostHomeAccount } from "@/app/_components/host/host-home-account";
 import Home from "@/app/page";
+import { Providers } from "@/app/_providers/providers";
 
 const RULES = {
   fields: {
@@ -55,15 +57,23 @@ const ticketsOn = () => {
   return document;
 };
 
+type Island = ReactElement<{ slug: string; href: string }> | null;
+interface HomeProps {
+  account?: ReactElement<{ navigation: unknown }>;
+  today?: ReactElement<{ children: Island[] }> | null;
+}
+
+/** The home element, and whether one provider tree wraps the whole of it. */
 async function home() {
   const element = (await Home()) as ReactElement<{
-    signedIn: boolean;
-    today: ReactElement<{
-      children: Array<ReactElement<{ slug: string; href: string }> | null>;
-    }> | null;
+    children?: ReactElement<HomeProps>;
   }>;
   expect(isValidElement(element)).toBe(true);
-  return element.props;
+  const providers = element.type === Providers;
+  const page = (
+    providers ? element.props.children : element
+  ) as ReactElement<HomeProps>;
+  return { providers, ...page.props };
 }
 
 afterEach(() => {
@@ -73,18 +83,32 @@ afterEach(() => {
 });
 
 describe("the home route", () => {
-  it("mounts no private island for a signed-out visitor", async () => {
+  it("is the public home for a visitor without a session cookie: no island, no provider", async () => {
     serve(ticketsOn());
     cookiePresent = false;
-    expect((await home()).today).toBeNull();
+    const props = await home();
+    expect(props.providers).toBe(false);
+    expect(props.account).toBeUndefined();
+    expect(props.today).toBeUndefined();
   });
 
-  it("mounts the Today island for the host's own Tickets face when a session cookie is present", async () => {
+  it("with a session cookie, mounts the header's account island and the Today island in one provider tree", async () => {
     serve(ticketsOn());
     cookiePresent = true;
-    const { today } = await home();
-    // Inside the providers: the island for exactly the configured face, and
-    // no membership card on a host without Loyalty.
+    const { providers, account, today } = await home();
+    expect(providers).toBe(true);
+    // The island gets the host's own navigation; identity is its own read.
+    expect(account?.type).toBe(HostHomeAccount);
+    expect(account?.props).toEqual({
+      navigation: [
+        { entry: "inventory", href: "/inventory" },
+        { entry: "products", href: "/products" },
+        { entry: "activity", href: "/activity" },
+        { entry: "settings", href: "/settings" },
+      ],
+    });
+    // Today for exactly the configured face, and no membership card on a
+    // host without Loyalty.
     const [tickets, loyalty] = today?.props.children ?? [];
     expect(tickets?.props).toEqual({
       slug: "morrow-home",
@@ -93,12 +117,14 @@ describe("the home route", () => {
     expect(loyalty).toBeNull();
   });
 
-  it("is unchanged for a host without Tickets, signed in or out", async () => {
-    for (const present of [false, true]) {
-      cookiePresent = present;
-      serve(morrowDocument(), false);
-      expect((await home()).today).toBeNull();
-    }
+  it("a host without Tickets mounts no Today island, signed in or out; signed in, still the account island", async () => {
+    serve(morrowDocument(), false);
+    cookiePresent = false;
+    expect((await home()).today).toBeUndefined();
+    cookiePresent = true;
+    const signedIn = await home();
+    expect(signedIn.today).toBeNull();
+    expect(signedIn.account?.type).toBe(HostHomeAccount);
   });
 
   it("keeps the generic wallet's redirects", async () => {
