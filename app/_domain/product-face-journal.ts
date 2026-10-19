@@ -76,6 +76,13 @@ export interface FaceJournalEntry {
   /** loyalty-join-earn-v1: the programme's activity type code. */
   activityType?: string;
   /**
+   * loyalty-benefit-redeem-v1: the benefit a member's redemption request
+   * redeems (its id only). Its `evidenceHash` is then the binding hash of the
+   * exact grant it names (programme revision, benefit, grant action,
+   * allocation); never the one-time reference, which is never journalled.
+   */
+  benefitId?: string;
+  /**
    * The host-read quote a quote approval or decline is bound to, as a hash of
    * its {quote_version, amount, currency}; never the quote itself.
    */
@@ -151,7 +158,10 @@ const OPERATION = /^[a-z_][a-z0-9_.]{1,63}$/;
 const OFFER_ID = /^pto-[0-9a-f]{24}$/;
 const ADMISSION_REQUEST_ID = /^tad-[0-9a-f]{32}$/;
 const ACTIVITY_TYPE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const BENEFIT_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 export const LOYALTY_SUBMIT_OPERATION = "loyalty.activity.submit";
+export const LOYALTY_REDEEM_OPERATION = "loyalty.redemption.request";
+const LOYALTY_OPERATIONS = [LOYALTY_SUBMIT_OPERATION, LOYALTY_REDEEM_OPERATION];
 const TRANSFER_OPERATIONS = ["transfer.request", "transfer.transfer"];
 
 /** A holder-signed step: reserved, then executed only after its own won. */
@@ -197,6 +207,9 @@ export function parseJournalEntry(
     (entry.activityType !== undefined &&
       (typeof entry.activityType !== "string" ||
         !ACTIVITY_TYPE.test(entry.activityType))) ||
+    (entry.benefitId !== undefined &&
+      (typeof entry.benefitId !== "string" ||
+        !BENEFIT_ID.test(entry.benefitId))) ||
     (entry.quoteHash !== undefined && !isRequestHash(entry.quoteHash)) ||
     (entry.freshHash !== undefined && !isRequestHash(entry.freshHash)) ||
     (entry.dispatch !== undefined &&
@@ -241,12 +254,18 @@ export function parseJournalEntry(
   }
   if (
     (entry.kind === "loyalty") !==
-      (entry.evidenceHash !== undefined || entry.activityType !== undefined) ||
+      (entry.evidenceHash !== undefined ||
+        entry.activityType !== undefined ||
+        entry.benefitId !== undefined) ||
     (entry.kind === "loyalty" &&
-      (entry.operation !== LOYALTY_SUBMIT_OPERATION ||
-        !entry.evidenceHash ||
-        !entry.activityType ||
-        !entry.requestHash))
+      (!entry.evidenceHash ||
+        !entry.requestHash ||
+        // An activity names its type; a redemption request its benefit.
+        (entry.operation === LOYALTY_SUBMIT_OPERATION
+          ? !entry.activityType || entry.benefitId !== undefined
+          : entry.operation !== LOYALTY_REDEEM_OPERATION ||
+            !entry.benefitId ||
+            entry.activityType !== undefined)))
   ) {
     return undefined;
   }
@@ -273,6 +292,7 @@ export function parseJournalEntry(
     ...(entry.activityType
       ? { activityType: entry.activityType as string }
       : {}),
+    ...(entry.benefitId ? { benefitId: entry.benefitId as string } : {}),
     ...(entry.quoteHash ? { quoteHash: entry.quoteHash as string } : {}),
     ...(entry.freshHash ? { freshHash: entry.freshHash as string } : {}),
     ...(entry.dispatch === "won" ? { dispatch: "won" as const } : {}),
@@ -400,21 +420,22 @@ export function sentAdmissionStep(entry: FaceJournalEntry) {
 }
 
 /**
- * loyalty-join-earn-v1: an activity submission whose one assertion this
- * wallet issued (open, or settled since). Wherever it is found, it is only
+ * loyalty-join-earn-v1: an activity submission (or, benefit-redeem-v1, a
+ * redemption request) whose one assertion this wallet issued (open, or settled since). Wherever it is found, it is only
  * read back under its original operation id: never resubmitted.
  */
 export function sentLoyaltyStep(entry: FaceJournalEntry) {
   return (
     entry.kind === "loyalty" &&
-    entry.operation === LOYALTY_SUBMIT_OPERATION &&
+    LOYALTY_OPERATIONS.includes(entry.operation) &&
     entry.issuedAt !== undefined &&
     (entry.phase === "assertion_issued" || entry.phase === "settled")
   );
 }
 
 /**
- * loyalty-join-earn-v1: a submission the member confirmed (`prepare`), its
+ * loyalty-join-earn-v1: a submission (or redemption request) the member
+ * confirmed (`prepare`), its
  * exact request bound by hash, whose journal reached the browser BEFORE
  * anything was sent. Nothing in this cookie says whether the one `submit`
  * that follows it was dispatched (that answer may be lost whole, Set-Cookie
@@ -425,7 +446,7 @@ export function sentLoyaltyStep(entry: FaceJournalEntry) {
 export function preparedLoyaltyStep(entry: FaceJournalEntry) {
   return (
     entry.kind === "loyalty" &&
-    entry.operation === LOYALTY_SUBMIT_OPERATION &&
+    LOYALTY_OPERATIONS.includes(entry.operation) &&
     entry.phase === "confirmed" &&
     entry.issuedAt === undefined &&
     Boolean(entry.requestHash)

@@ -1275,6 +1275,35 @@ button {
 .loyalty-submission {
   padding: 16px;
 }
+/* loyalty-benefit-redeem-v1: benefits, the reward and its reference. */
+.loyalty-benefit-list,
+.loyalty-progress {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.loyalty-benefit {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.loyalty-reference {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 2px dashed var(--brand-strong);
+  border-radius: 12px;
+}
+.loyalty-reference-code {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
 .ticket-detail {
   display: grid;
   gap: 12px;

@@ -14,6 +14,8 @@
 import { canonicalJson, isObjectId, isOperationId } from "./product-face";
 
 export const LOYALTY_CONTRACT = "loyalty-join-earn-v1";
+/** The optional benefits and redemption extension (loyalty-benefit-redeem-v1). */
+export const LOYALTY_BENEFITS_CONTRACT = "loyalty-benefit-redeem-v1";
 /** Studio's purpose id, written into every canonical map. */
 export const LOYALTY_PURPOSE = "membership-loyalty-rewards";
 
@@ -27,6 +29,12 @@ export const loyaltyHostOperations = [
   "loyalty.membership.read",
   "loyalty.activity.submit",
   "loyalty.activity.status",
+  // loyalty-benefit-redeem-v1: member-only; operator, verifier, partner and
+  // settlement actions are never wallet operations.
+  "loyalty.benefits.read",
+  "loyalty.redemption.request",
+  "loyalty.redemption.status",
+  "loyalty.redemption.reference",
 ] as const;
 export type LoyaltyHostOperation = (typeof loyaltyHostOperations)[number];
 
@@ -52,6 +60,15 @@ export const LOYALTY_STATES = [
 ] as const;
 const HELD_STATE = "Suspended";
 const ENDED_STATE = "Expired";
+/**
+ * The only states a member's activity is offered or prepared from. Studio's
+ * pack also allows Benefit eligible and Redeemed, which would strand an
+ * unspent reward or a pending settlement (loyalty-benefit-redeem-v1 §2 (3)).
+ */
+export const SUBMITTABLE_STATES: readonly string[] = [
+  "Member",
+  "Activity verified",
+];
 
 export const PASS_SCHEMA = "participant-opening-pass-v1";
 export const PASS_PRODUCT_TYPE = "participant_opening_pass";
@@ -68,6 +85,8 @@ export interface LoyaltyRules {
   passTemplateId: string;
   /** Lowercase 0x address: the issuer account that owns and signs. */
   canonicalIssuerAccount: string;
+  /** Present only on a binding that states the benefits extension. */
+  benefits?: typeof LOYALTY_BENEFITS_CONTRACT;
 }
 
 const MODEL_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
@@ -99,9 +118,11 @@ export function parseLoyaltyRules(
   value: unknown,
 ): LoyaltyRules | null | undefined {
   if (value === undefined) return null;
+  const benefits = record(value) && Object.hasOwn(value, "benefits");
   if (
     !record(value) ||
-    !exactKeys(value, RULE_KEYS) ||
+    !exactKeys(value, benefits ? [...RULE_KEYS, "benefits"] : RULE_KEYS) ||
+    (benefits && value.benefits !== LOYALTY_BENEFITS_CONTRACT) ||
     value.contract !== LOYALTY_CONTRACT ||
     typeof value.modelId !== "string" ||
     !MODEL_ID.test(value.modelId) ||
@@ -122,6 +143,7 @@ export function parseLoyaltyRules(
     canonicalTemplateId: value.canonicalTemplateId,
     passTemplateId: value.passTemplateId,
     canonicalIssuerAccount: value.canonicalIssuerAccount,
+    ...(benefits ? { benefits: LOYALTY_BENEFITS_CONTRACT } : {}),
   };
 }
 
@@ -378,7 +400,14 @@ export function parseCanonicalRead(value: unknown): CanonicalRead | undefined {
 }
 
 export type ReceiptSemantic =
-  "create_membership" | "submit_activity" | "verify_activity";
+  | "create_membership"
+  | "submit_activity"
+  | "verify_activity"
+  // loyalty-benefit-redeem-v1
+  | "unlock_benefit"
+  | "request_redemption"
+  | "confirm_redemption"
+  | "settle_partner";
 
 /** One Dual action, from the runtime's retained write (§3). */
 export interface ActionReceipt {
@@ -539,6 +568,8 @@ export const SUBMIT_REFUSALS = [
   "loyalty_activity_evidence_duplicate",
   "loyalty_activity_type_unknown",
   "membership_not_active",
+  // benefit-redeem §2 (3): not from a state where it would strand value.
+  "loyalty_activity_not_permitted",
 ] as const;
 export type SubmitRefusal = (typeof SUBMIT_REFUSALS)[number];
 
@@ -744,7 +775,22 @@ const STATE_OF: Record<ReceiptSemantic, string> = {
   create_membership: "Member",
   submit_activity: "Activity pending",
   verify_activity: "Activity verified",
+  unlock_benefit: "Benefit eligible",
+  request_redemption: "Redemption pending",
+  confirm_redemption: "Redeemed",
+  settle_partner: "Member",
 };
+/** The reward semantics whose map names the benefit (benefit-redeem §5). */
+const NAMES_BENEFIT: readonly ReceiptSemantic[] = [
+  "unlock_benefit",
+  "request_redemption",
+  "confirm_redemption",
+];
+/** Those whose public event fields carry `benefitReference`. */
+const PUBLISHES_BENEFIT: readonly ReceiptSemantic[] = [
+  "unlock_benefit",
+  "confirm_redemption",
+];
 
 /**
  * §5 (1)-(5): one action receipt on C, its retained full map (hash checked
@@ -764,6 +810,7 @@ export function checkReceipt(
     change: PublicStateChangeFacts | undefined;
   },
   evidenceHash?: string,
+  benefitId?: string,
 ): ProofFailure | null {
   const { rules } = context;
   const written = receipt.writtenCustom;
@@ -795,7 +842,12 @@ export function checkReceipt(
         ))) ||
     (receipt.semantic === "submit_activity" &&
       (!evidenceHash ||
-        !publicFields.includes(`activityEvidenceHash:${evidenceHash}`)))
+        !publicFields.includes(`activityEvidenceHash:${evidenceHash}`))) ||
+    // A reward step names exactly its benefit, root and public field.
+    (NAMES_BENEFIT.includes(receipt.semantic) &&
+      (!benefitId || written.benefitReference !== benefitId)) ||
+    (PUBLISHES_BENEFIT.includes(receipt.semantic) &&
+      !publicFields.includes(`benefitReference:${benefitId}`))
   ) {
     return "receipt_mismatch";
   }

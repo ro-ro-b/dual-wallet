@@ -44,6 +44,7 @@ export function loyaltyRegistry(runtimeOrigin) {
         canonicalTemplateId: CANON_TEMPLATE,
         passTemplateId: PASS_TEMPLATE,
         canonicalIssuerAccount: ISSUER,
+        benefits: "loyalty-benefit-redeem-v1",
       },
     },
   ];

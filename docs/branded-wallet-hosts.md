@@ -273,6 +273,15 @@ is the transfer journey's and is refused on a host without it.
   its one `submit` can leave, so even a submit answer lost whole is found
   again and only read back. The full contract, its proof rules and its live
   release blockers are in [loyalty-join-earn-v1](./proposals/loyalty-join-earn-v1.md).
+- A binding whose `loyalty` block also states
+  `"benefits": "loyalty-benefit-redeem-v1"` adds the member's benefits:
+  - progress, eligibility, the operator's grant;
+  - the member's own one-time redemption request and reference;
+  - the partner's recorded confirmation and settlement.
+
+  Each is proven or labelled
+  ([loyalty-benefit-redeem-v1](./proposals/loyalty-benefit-redeem-v1.md)).
+  Without the key, nothing changes.
 
 ### Enforcement is on the server
 

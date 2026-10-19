@@ -10,13 +10,16 @@ import {
 } from "@/app/_components/design-system/field";
 import { PageHeader } from "@/app/_components/design-system/page-header";
 import { newFaceLaunchId } from "@/app/_domain/product-face";
+import { BenefitsSection } from "@/app/_components/products/loyalty-benefits";
 import {
   EVIDENCE_MAX,
+  SUBMITTABLE_STATES,
   type LoyaltyMembershipView,
   type LoyaltyProgramme,
   type LoyaltySubmissionStatus,
 } from "@/app/_domain/loyalty";
 import {
+  useLoyaltyBenefits,
   useLoyaltyMembership,
   useLoyaltyProgramme,
   useRefreshMembership,
@@ -49,6 +52,7 @@ const FAILURES = [
   "loyalty_activity_type_unknown",
   "membership_not_active",
   "submission_in_progress",
+  "loyalty_activity_not_permitted",
   "capability_not_granted",
   "session_expired",
 ];
@@ -317,21 +321,47 @@ function SubmissionItem({
   );
 }
 
+/** Why an activity is not offered now: the lifecycle's next step. */
+const WAIT: Record<string, string> = {
+  "Activity pending": "activity_pending",
+  "Benefit eligible": "benefit_eligible",
+  "Redemption pending": "redemption_pending",
+  Redeemed: "redeemed",
+};
+
 function MembershipSection({
   view,
   programme,
   where,
+  walletId,
+  benefitsEnabled,
   submissions,
   onChanged,
 }: {
   view: LoyaltyMembershipView;
   programme: LoyaltyProgramme;
   where: Where;
+  walletId: string;
+  benefitsEnabled: boolean;
   submissions: Array<{ operationId: string; activityType: string }>;
   onChanged: () => void;
 }) {
   const t = useTranslations("loyalty");
   const format = useFormatter();
+  const created =
+    view.status === "active" ||
+    view.status === "held" ||
+    view.status === "ended";
+  const benefits = useLoyaltyBenefits({
+    slug: where.slug,
+    launchId: where.launchId,
+    walletId,
+    enabled: benefitsEnabled && created,
+  });
+  const benefitsSection =
+    benefitsEnabled && created ? (
+      <BenefitsSection where={where} read={benefits} onChanged={onChanged} />
+    ) : null;
   // This page's own new submissions, with the status their send proved.
   const [recent, setRecent] = useState<
     Array<{
@@ -379,23 +409,35 @@ function MembershipSection({
               </Button>
             </div>
           ) : null}
+          {/* Held or ended: the reward's last proven step, as the past. */}
+          {benefitsSection}
         </>
       );
     case "active": {
       const known = new Set(recent.map((item) => item.operationId));
+      const state = view.membership.state;
+      // Only from a state where it strands nothing (benefit-redeem §6); with
+      // benefits, exactly as the proven view permits.
+      const offered = benefitsEnabled
+        ? Boolean(benefits.data?.benefits?.actions.submitActivity)
+        : SUBMITTABLE_STATES.includes(state);
       return (
         <>
           <p role="status">{t("status.active")}</p>
           <section aria-labelledby="loyalty-activity">
             <h3 id="loyalty-activity">{t("activityTitle")}</h3>
-            <ActivityForm
-              programme={programme}
-              where={where}
-              onSubmitted={(submission) => {
-                setRecent((items) => [submission, ...items]);
-                onChanged();
-              }}
-            />
+            {offered ? (
+              <ActivityForm
+                programme={programme}
+                where={where}
+                onSubmitted={(submission) => {
+                  setRecent((items) => [submission, ...items]);
+                  onChanged();
+                }}
+              />
+            ) : benefitsEnabled && benefits.isPending ? null : (
+              <p role="status">{t(`activityWait.${WAIT[state] ?? "other"}`)}</p>
+            )}
           </section>
           <section aria-labelledby="loyalty-submissions">
             <h3 id="loyalty-submissions">{t("submissionsTitle")}</h3>
@@ -426,6 +468,7 @@ function MembershipSection({
               <p>{t("noSubmissions")}</p>
             )}
           </section>
+          {benefitsSection}
         </>
       );
     }
@@ -493,9 +536,13 @@ export function LoyaltyView({
       >
         <h2 id="loyalty-membership">{t("membershipTitle")}</h2>
         <MembershipSection
+          // Another wallet or programme starts from nothing on this page.
+          key={`${slug}:${wallet?.id ?? ""}`}
           view={membershipData.membership}
           programme={programmeData}
           where={where}
+          walletId={wallet?.id ?? ""}
+          benefitsEnabled={membershipData.benefits}
           submissions={membershipData.submissions}
           onChanged={() => void refresh()}
         />

@@ -9,7 +9,7 @@
 // and origin, naming the operation, op_id, target and the request hash of
 // exactly the body. Join and approval write nothing to Dual; the issuer's
 // writes go through the fake API's world (e2e/loyalty/world.mjs).
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash, createHmac, createPublicKey, verify } from "node:crypto";
 import { createServer } from "node:http";
 import {
   CANON,
@@ -57,6 +57,12 @@ function reset() {
     opening: null,
     pass: false,
     submissions: new Map(),
+    // loyalty-benefit-redeem-v1: verified pairs, the latest reward chain,
+    // one shared stock ledger and the member's requests by operation id.
+    pairs: [],
+    reward: null,
+    ledger: new Map(),
+    requests: new Map(),
     counts: {},
     /** Every operation this runtime received, in order, by its id. */
     received: [],
@@ -166,8 +172,40 @@ const base = (lifecycleState) => ({
   state: lifecycleState,
   tierStatus: "",
   eligibilitySummary: "",
-  benefitReference: "",
+  // The record's one current benefit (Studio's attribute), once granted.
+  benefitReference: state.reward?.benefitId ?? "",
   redemptionStatus: "",
+});
+
+// ---- loyalty-benefit-redeem-v1 (fictional programme terms) ----
+const BENEFIT = "studio-hour";
+const STOCK = 1;
+const REVISION = sha("fictional-revision-1");
+const BASE32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+/** Studio's HMAC one-time reference of one request event (never stored). */
+function referenceOf(eventId) {
+  const digest = createHmac("sha256", "fictional-ledger-redemption-key")
+    .update(`tig-loyalty-redemption-v1\n${RECORD_ID}\n${eventId}`)
+    .digest();
+  const code = [...digest]
+    .slice(0, 8)
+    .map((byte) => BASE32[byte % BASE32.length])
+    .join("");
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+const currentState = async () => (await canonicalRead()).custom.state;
+const bindingOf = (reward) => ({
+  revision_hash: REVISION,
+  benefit_id: reward.benefitId,
+  grant_action_id: reward.grant.action_id,
+  allocation_id: reward.allocation.allocation_id,
+});
+const chainOf = (reward, requestKey) => ({
+  grant: reward.grant,
+  allocation: reward.allocation,
+  ...(reward.request ? { [requestKey]: reward.request } : {}),
+  ...(reward.confirmation ? { confirmation: reward.confirmation } : {}),
+  ...(reward.settlement ? { settlement: reward.settlement } : {}),
 });
 const lifecycle = (semantic, eventId, lifecycleState) => ({
   lifecycle: {
@@ -334,6 +372,17 @@ async function operate(body, claims) {
           },
         ];
       }
+      // Studio's required precondition (benefit-redeem §2 (3)).
+      if (!["Member", "Activity verified"].includes(await currentState())) {
+        return [
+          409,
+          {
+            ok: false,
+            status: "loyalty_activity_not_permitted",
+            accounting: zero("loyalty_activity_not_permitted"),
+          },
+        ];
+      }
       const evidenceHash = sha(String(input.evidence_ref));
       if (
         [...state.submissions.values()].some(
@@ -403,6 +452,170 @@ async function operate(body, claims) {
           canonical: await canonicalRead(),
           action: held.receipt,
           ...(held.verification ? { verification: held.verification } : {}),
+        },
+      ];
+    }
+    case "loyalty.benefits.read": {
+      const used = state.ledger.size;
+      const remaining = Math.max(0, STOCK - used);
+      const pending = (await currentState()) === "Activity pending";
+      return [
+        200,
+        {
+          ok: true,
+          status: "benefits_read",
+          programme: { programme_id: PROGRAMME_ID, revision_hash: REVISION },
+          canonical: await canonicalRead(),
+          progress: [
+            {
+              rule_id: "two-workshops",
+              label: "Two verified workshops",
+              activity_types: ["workshop"],
+              benefit_ids: [BENEFIT],
+              required_verified: 2,
+              verified: state.pairs.length,
+              pending_verification: pending ? 1 : 0,
+            },
+          ],
+          verified_activities: state.pairs,
+          benefits: [
+            {
+              benefit_id: BENEFIT,
+              title: "A studio hour (fictional)",
+              description: "One hour in the open studio.",
+              type: "access_pass",
+              partner: {
+                partner_id: "harbour-workshop",
+                name: "Harbour Workshop (fictional)",
+              },
+              valid_days: 30,
+              terms: "Book at the studio desk.",
+              redeemed_before: false,
+              stock: {
+                stock: STOCK,
+                remaining,
+                status: remaining > 0 ? "available" : "exhausted",
+              },
+            },
+          ],
+          reward: state.reward
+            ? {
+                benefit_id: state.reward.benefitId,
+                valid_until: state.reward.validUntil,
+                ...chainOf(state.reward, "request"),
+              }
+            : null,
+          accounting: zero("benefits_read"),
+        },
+      ];
+    }
+    case "loyalty.redemption.request": {
+      // Idempotent by operationId, before every other check.
+      if (state.requests.has(body.operationId)) {
+        return [
+          409,
+          {
+            ok: false,
+            status: "operation_already_received",
+            accounting: zero("operation_already_received"),
+          },
+        ];
+      }
+      const refuse = (status) => [
+        409,
+        { ok: false, status, accounting: zero(status) },
+      ];
+      const reward = state.reward;
+      if ((await currentState()) !== "Benefit eligible" || !reward) {
+        return refuse("loyalty_redemption_not_permitted");
+      }
+      if (canonicalJson(input) !== canonicalJson(bindingOf(reward))) {
+        return refuse("loyalty_reward_changed");
+      }
+      if (Date.now() >= Date.parse(reward.validUntil)) {
+        return refuse("loyalty_reward_expired");
+      }
+      const eventId = `evt-request-${body.operationId}`;
+      reward.request = {
+        ...(await act(CANON, "update", {
+          ...base("Redemption pending"),
+          ...lifecycle("request_redemption", eventId, "Redemption pending"),
+          proof_event: {
+            event_type: "request_redemption",
+            public_fields: [
+              "action:request_redemption",
+              "state:Redemption pending",
+            ],
+          },
+        })),
+        semantic: "request_redemption",
+      };
+      reward.requestEvent = eventId;
+      state.requests.set(body.operationId, bindingOf(reward));
+      return [
+        200,
+        {
+          ok: true,
+          status: "redemption_requested",
+          canonical: await canonicalRead(),
+          grant: reward.grant,
+          allocation: reward.allocation,
+          action: reward.request,
+          accounting: { dual_writes: 1, reason: "redemption_requested" },
+        },
+      ];
+    }
+    case "loyalty.redemption.status": {
+      const held = state.requests.get(body.operationId);
+      if (!held || !state.reward) {
+        return [
+          200,
+          {
+            ok: true,
+            status: "not_received",
+            accounting: zero("operation_not_received"),
+          },
+        ];
+      }
+      return [
+        200,
+        {
+          ok: true,
+          status: state.reward.confirmation ? "confirmed" : "requested",
+          binding: held,
+          canonical: await canonicalRead(),
+          valid_until: state.reward.validUntil,
+          ...chainOf(state.reward, "action"),
+        },
+      ];
+    }
+    case "loyalty.redemption.reference": {
+      const reward = state.reward;
+      if (
+        (await currentState()) !== "Redemption pending" ||
+        !reward?.request ||
+        input.request_action_id !== reward.request.action_id
+      ) {
+        return [
+          409,
+          {
+            ok: false,
+            status: "loyalty_redemption_not_current",
+            accounting: zero("loyalty_redemption_not_current"),
+          },
+        ];
+      }
+      return [
+        200,
+        {
+          ok: true,
+          status: "reference_shown",
+          reference: referenceOf(reward.requestEvent),
+          canonical: await canonicalRead(),
+          grant: reward.grant,
+          allocation: reward.allocation,
+          action: reward.request,
+          accounting: zero("reference_shown"),
         },
       ];
     }
@@ -501,6 +714,111 @@ createServer(async (request, response) => {
             },
           })),
           semantic: "verify_activity",
+        };
+        state.pairs.push({
+          activity_type: held.submission.activity_type,
+          evidence_hash: held.submission.evidence_hash,
+          submission: held.receipt,
+          verification: held.verification,
+        });
+        return json(response, 200, { ok: true });
+      }
+      // The programme operator's grant (its own Studio session): verified
+      // eligibility, then one unit of the shared stock, then the update.
+      case "/__test__/grant": {
+        if ((await currentState()) !== "Activity verified") {
+          return json(response, 409, { ok: false, status: "not_permitted" });
+        }
+        if (state.pairs.length < 2) {
+          return json(response, 409, { ok: false, status: "not_eligible" });
+        }
+        if (state.ledger.size >= STOCK) {
+          return json(response, 409, { ok: false, status: "exhausted" });
+        }
+        const eventId = `evt-unlock-${state.pairs.length}`;
+        state.reward = {
+          benefitId: BENEFIT,
+          validUntil: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+        };
+        const grant = {
+          ...(await act(CANON, "update", {
+            ...base("Benefit eligible"),
+            ...lifecycle("unlock_benefit", eventId, "Benefit eligible"),
+            proof_event: {
+              event_type: "unlock_benefit",
+              public_fields: [
+                "action:unlock_benefit",
+                "state:Benefit eligible",
+                `benefitReference:${BENEFIT}`,
+              ],
+            },
+          })),
+          semantic: "unlock_benefit",
+        };
+        const allocation = {
+          allocation_id: `alc_${hex(`${BENEFIT}\n${RECORD_ID}\n${eventId}`).slice(0, 32)}`,
+          benefit_id: BENEFIT,
+          event_id: eventId,
+          status: "consumed",
+          proof: { object_id: CANON, action_id: grant.action_id },
+        };
+        state.ledger.set(allocation.allocation_id, allocation);
+        state.reward = { ...state.reward, grant, allocation };
+        return json(response, 200, { ok: true });
+      }
+      // The partner, presenting the member's reference in its own session.
+      case "/__test__/partner/confirm": {
+        const reward = state.reward;
+        if (
+          (await currentState()) !== "Redemption pending" ||
+          !reward?.requestEvent ||
+          body.reference !== referenceOf(reward.requestEvent)
+        ) {
+          return json(response, 409, {
+            ok: false,
+            status: "loyalty_redemption_reference_invalid",
+          });
+        }
+        reward.confirmation = {
+          ...(await act(CANON, "update", {
+            ...base("Redeemed"),
+            ...lifecycle(
+              "confirm_redemption",
+              `evt-confirm-${reward.requestEvent}`,
+              "Redeemed",
+            ),
+            proof_event: {
+              event_type: "confirm_redemption",
+              public_fields: [
+                "action:confirm_redemption",
+                "state:Redeemed",
+                `benefitReference:${reward.benefitId}`,
+              ],
+            },
+          })),
+          semantic: "confirm_redemption",
+        };
+        return json(response, 200, { ok: true });
+      }
+      case "/__test__/settle": {
+        const reward = state.reward;
+        if ((await currentState()) !== "Redeemed" || !reward) {
+          return json(response, 409, { ok: false });
+        }
+        reward.settlement = {
+          ...(await act(CANON, "update", {
+            ...base("Member"),
+            ...lifecycle(
+              "settle_partner",
+              `evt-settle-${reward.requestEvent}`,
+              "Member",
+            ),
+            proof_event: {
+              event_type: "settle_partner",
+              public_fields: ["action:settle_partner", "state:Member"],
+            },
+          })),
+          semantic: "settle_partner",
         };
         return json(response, 200, { ok: true });
       }

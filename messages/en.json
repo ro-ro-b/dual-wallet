@@ -784,7 +784,8 @@
       "unavailable": "We couldn't check your membership right now. This doesn't mean you have none.",
       "retry": "Try again",
       "sessionExpired": "Your session has ended.",
-      "signIn": "Sign in again"
+      "signIn": "Sign in again",
+      "reward": "{benefit}: {status}"
     }
   },
   "loyalty": {
@@ -846,7 +847,87 @@
       "loyalty_activity_evidence_duplicate": "This activity was already submitted. Nothing new was recorded.",
       "loyalty_activity_type_unknown": "The programme doesn't count this kind of activity. Nothing was recorded.",
       "membership_not_active": "Your membership isn't active, so nothing was recorded.",
-      "submission_in_progress": "This activity was already sent. Check its status instead."
+      "submission_in_progress": "This activity was already sent. Check its status instead.",
+      "redemption_in_progress": "This reward was already requested. Check its status instead.",
+      "loyalty_redemption_not_permitted": "This reward can't be requested right now. Nothing was sent.",
+      "loyalty_reward_changed": "Your reward changed since you saw it. Nothing was recorded.",
+      "loyalty_reward_expired": "This reward has expired. Nothing was recorded.",
+      "loyalty_reward_unverified": "This reward can't be verified right now. Nothing was recorded.",
+      "loyalty_redemption_already_requested": "This reward was already requested. Nothing new was recorded.",
+      "loyalty_redemption_not_current": "There's no current request to show a reference for.",
+      "loyalty_activity_not_permitted": "An activity can't be recorded right now. Nothing was sent."
+    },
+    "activityWait": {
+      "activity_pending": "Waiting for the programme to verify your last activity. You can record another once it's verified.",
+      "benefit_eligible": "You have a reward to redeem. Request it before recording more activities.",
+      "redemption_pending": "Your redemption is with the partner. You can record more activities once it's settled.",
+      "redeemed": "The partner recorded your redemption. The programme records the settlement before you can record more activities.",
+      "other": "An activity can't be recorded right now."
+    },
+    "benefits": {
+      "title": "Benefits",
+      "progressTitle": "Your progress",
+      "progressNote": "The programme's own count of your verified activities.",
+      "progress": "{label}: {verified} of {required} verified",
+      "progressPending": "One more is waiting for verification.",
+      "validity": "Valid for {days} days once granted (programme terms).",
+      "partner": "Redeemed with {partner}.",
+      "inHouse": "Redeemed with the programme team.",
+      "status": {
+        "locked": "Not earned yet.",
+        "eligible_unconfirmed": "The programme counts you as eligible, but this can't be confirmed right now.",
+        "eligible": "You've earned this. The programme team grants it.",
+        "already_redeemed": "You've already redeemed this benefit.",
+        "granted": "Granted to you. Request it when you're ready.",
+        "expired": "This reward has expired. Contact the programme team.",
+        "requested": "Requested. Show your one-time reference to the partner.",
+        "confirmation_recording": "The partner's confirmation is being recorded. It isn't confirmed yet.",
+        "confirmed": "The partner recorded your redemption.",
+        "settled": "Redeemed, and the programme recorded the partner settlement.",
+        "not_redeemable": "This reward can't be redeemed here after a later change. Contact the programme team.",
+        "unconfirmed": "This reward can't be confirmed right now. Nothing has been changed."
+      },
+      "availability": {
+        "available": "Available now (programme record).",
+        "unavailable": "None available right now (programme record).",
+        "unconfirmed": "Availability can't be confirmed right now."
+      },
+      "next": {
+        "verifier": "Next: the programme verifies your last activity.",
+        "programme_team": "Next: the programme team.",
+        "partner": "Next: the partner confirms your redemption.",
+        "settlement": "Next: the programme records the partner settlement."
+      },
+      "rewardTitle": "Your reward",
+      "validUntil": "Valid until {date} (programme record).",
+      "request": "Request redemption",
+      "requesting": "Requesting…",
+      "requestNote": "This asks to redeem your reward once with the partner. It can't be undone.",
+      "showReference": "Show my one-time reference",
+      "hideReference": "Hide reference",
+      "referenceLabel": "Your one-time reference",
+      "referenceNote": "Show this to {partner} in person. It works once. Don't share it anywhere else.",
+      "referenceNoteInHouse": "Show this to the programme team in person. It works once. Don't share it anywhere else.",
+      "fulfilment": "This wallet doesn't track delivery. If you didn't receive the benefit, contact the programme team with the date of your redemption.",
+      "settlementNote": "Settlement is the programme's record with the partner. It isn't a payment to you.",
+      "heldNote": "Your membership is on hold. The programme team decides what happens to this reward.",
+      "unconfirmedAll": "Your benefits can't be confirmed right now. Nothing has been changed.",
+      "unavailable": "We couldn't check your benefits right now.",
+      "retry": "Try again",
+      "requestsTitle": "Redemption requests from this wallet",
+      "request_status": {
+        "requested": "Requested.",
+        "confirmation_recording": "The partner's confirmation is being recorded.",
+        "confirmed": "The partner recorded this redemption.",
+        "settled": "Redeemed and settled.",
+        "unknown": "This may have been sent, but its outcome isn't confirmed yet. It won't be sent again.",
+        "not_received": "The programme didn't receive this request. Nothing was recorded.",
+        "unconfirmed": "The programme answered, but this couldn't be confirmed. It won't be sent again.",
+        "unchecked": "Not checked on this page yet.",
+        "checking": "Checking…",
+        "failed": "We couldn't check this right now. It won't be sent again."
+      },
+      "check": "Check status"
     }
   }
 }

@@ -2,6 +2,13 @@ import "client-only";
 
 import { isOperationId } from "@/app/_domain/product-face";
 import {
+  isLoyaltyBenefitsView,
+  isLoyaltyRedemptionView,
+  REDEMPTION_REFERENCE,
+  type LoyaltyBenefitsView,
+  type LoyaltyRedemptionView,
+} from "@/app/_domain/loyalty-benefits";
+import {
   ACTIVITY_TYPE,
   isLoyaltySubmissionView,
   type LoyaltyJoinRecord,
@@ -174,6 +181,8 @@ function membershipOf(value: unknown): LoyaltyMembershipView | undefined {
 export interface MembershipRead {
   membership: LoyaltyMembershipView;
   submissions: Array<{ operationId: string; activityType: string }>;
+  /** Whether this binding states loyalty-benefit-redeem-v1. */
+  benefits: boolean;
 }
 
 export async function readMembership(
@@ -199,9 +208,13 @@ export async function readMembership(
   ) {
     throw new LoyaltyError("unavailable");
   }
+  if (typeof body.benefits !== "boolean") {
+    throw new LoyaltyError("unavailable");
+  }
   return {
     membership,
     submissions: submissions as MembershipRead["submissions"],
+    benefits: body.benefits,
   };
 }
 
@@ -311,4 +324,157 @@ export function submissionStatus(where: Where, operationId: string) {
       operation_id: operationId,
     }),
   );
+}
+
+// ------------------------------------------- loyalty-benefit-redeem-v1
+
+export interface BenefitsRead {
+  /** Null before the membership exists, or when it cannot be confirmed. */
+  benefits: LoyaltyBenefitsView | null;
+  unconfirmed: boolean;
+  redemptions: Array<{ operationId: string; benefitId: string }>;
+}
+
+export async function readBenefits(
+  where: Where,
+  signal?: AbortSignal,
+): Promise<BenefitsRead> {
+  const body = await loyaltyRequest(where, { transition: "benefits" }, signal);
+  const redemptions = Array.isArray(body.redemptions) ? body.redemptions : [];
+  if (
+    (body.benefits !== null && !isLoyaltyBenefitsView(body.benefits)) ||
+    typeof body.unconfirmed !== "boolean" ||
+    !redemptions.every(
+      (item) =>
+        record(item) &&
+        isOperationId(item.operationId) &&
+        typeof item.benefitId === "string",
+    )
+  ) {
+    throw new LoyaltyError("unavailable");
+  }
+  return {
+    benefits: body.benefits as LoyaltyBenefitsView | null,
+    unconfirmed: body.unconfirmed,
+    redemptions: redemptions as BenefitsRead["redemptions"],
+  };
+}
+
+async function redemptionAnswer(
+  where: Where,
+  body: Record<string, unknown>,
+): Promise<LoyaltyRedemptionView> {
+  const answer = await loyaltyRequest(where, body);
+  if (!isLoyaltyRedemptionView(answer.redemption)) {
+    throw new LoyaltyError("unavailable");
+  }
+  return answer.redemption;
+}
+
+/** The runtime's own zero-write refusals of a sent request. */
+const REDEEM_REFUSALS = [
+  "loyalty_redemption_not_permitted",
+  "loyalty_reward_changed",
+  "loyalty_reward_expired",
+  "loyalty_reward_unverified",
+  "loyalty_redemption_already_requested",
+  "membership_not_active",
+];
+
+export type RedeemOutcome =
+  | { kind: "not_sent"; code: string }
+  | { kind: "refused"; code: string }
+  | { kind: "sent"; redemption: LoyaltyRedemptionView };
+
+/**
+ * One redemption request for exactly the grant shown: `redeem_prepare`
+ * (journalled and returned, nothing sent), then exactly one `redeem_submit`.
+ * Any failure after the prepare leaves it possibly sent: shown as unknown
+ * under its original id and never sent again.
+ */
+export function requestRedemption(
+  where: Where,
+  benefitId: string,
+  grantActionId: string,
+): Promise<RedeemOutcome> {
+  return serial(where, async () => {
+    let operationId: string;
+    let binding: Record<string, unknown>;
+    try {
+      const answer = await loyaltyRequest(where, {
+        transition: "redeem_prepare",
+        benefit_id: benefitId,
+        grant_action_id: grantActionId,
+      });
+      const value = record(answer.prepared) ? answer.prepared : {};
+      if (!isOperationId(value.operationId) || !record(value.binding)) {
+        throw new LoyaltyError("unavailable");
+      }
+      operationId = value.operationId;
+      binding = value.binding;
+    } catch (error) {
+      return {
+        kind: "not_sent",
+        code: error instanceof LoyaltyError ? error.code : "unavailable",
+      };
+    }
+    try {
+      return {
+        kind: "sent",
+        redemption: await redemptionAnswer(where, {
+          transition: "redeem_submit",
+          operation_id: operationId,
+          benefit_id: binding.benefit_id,
+          grant_action_id: binding.grant_action_id,
+          allocation_id: binding.allocation_id,
+          revision_hash: binding.revision_hash,
+        }),
+      };
+    } catch (error) {
+      if (
+        error instanceof LoyaltyError &&
+        REDEEM_REFUSALS.includes(error.code)
+      ) {
+        return { kind: "refused", code: error.code };
+      }
+      return {
+        kind: "sent",
+        redemption: { operationId, benefitId, status: "unknown" },
+      };
+    }
+  });
+}
+
+/** Read-only status of one of this wallet's own requests. Never resends. */
+export function redemptionStatus(where: Where, operationId: string) {
+  return serial(where, () =>
+    redemptionAnswer(where, {
+      transition: "redeem_status",
+      operation_id: operationId,
+    }),
+  );
+}
+
+/**
+ * The member's one-time reference for the current request, on their own
+ * explicit action. Returned to the caller only: never cached, stored, put in
+ * a URL or logged.
+ */
+export async function showRedemptionReference(
+  where: Where,
+  requestActionId: string,
+): Promise<string> {
+  const answer = await loyaltyRequest(where, {
+    transition: "reference",
+    request_action_id: requestActionId,
+  });
+  const value = record(answer.reference) ? answer.reference : {};
+  if (
+    typeof value.code !== "string" ||
+    !REDEMPTION_REFERENCE.test(value.code) ||
+    value.requestActionId !== requestActionId
+  ) {
+    throw new LoyaltyError("unavailable");
+  }
+  return value.code;
 }

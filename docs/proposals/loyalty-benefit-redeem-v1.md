@@ -114,7 +114,8 @@ Allocation  = {   // APPLICATION record: the app's shared-stock ledger, not Dual
 
 BenefitTerms = {  // APPLICATION record: the programme revision's terms
   "benefit_id": BenefitId, "title", "description", "type", "value"?: { "amount": int },
-  "partner": { "partner_id", "name" } | null, "valid_days": int, "terms" }
+  "partner": { "partner_id", "name" } | null, "valid_days": int, "terms",
+  "redeemed_before": boolean }   // a verified confirm of it on this record already
 
 StockView   = {   // APPLICATION record: Studio's availability view
   "stock": int>=0, "remaining": int>=0 | null,
@@ -191,18 +192,23 @@ idempotent by `operationId`, as `loyalty.activity.submit` is
 
 ### 4.4 `loyalty.redemption.reference` (read, explicit, member only)
 
-`operationId` is the original request's; `input: {}`. Asked only when the
-member chooses to show it.
+`input: { "request_action_id" }`: the Dual action id of the record's
+current request, as `loyalty.benefits.read` showed it. `operationId` is a
+fresh read id, not the request's, so the member can show the reference from
+any device or session, even after the request's journal has expired. It is
+asked only when the member chooses to show it.
 
-| HTTP | `status`                         | Body                                                                                                                               |
-| ---- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| 200  | `reference_shown`                | `reference` (`/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/`), `canonical`, `action` (this request), `accounting {0, "reference_shown"}` |
-| 409  | `loyalty_redemption_not_current` | `accounting {0, …}`: the request was confirmed, expired, held or replaced; no reference                                            |
+| HTTP | `status`                         | Body                                                                                                                                                      |
+| ---- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | `reference_shown`                | `reference` (`/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/`), `canonical`, `grant`, `allocation`, `action` (this request), `accounting {0, "reference_shown"}` |
+| 409  | `loyalty_redemption_not_current` | `accounting {0, …}`: the request was confirmed, expired, held or replaced; no reference                                                                   |
 
 The reference is the existing HMAC one: the same request always shows the
 same reference, and a new one is never minted. It is never written to the
 journal, a log, a URL, browser storage, the Home card or any agent or MCP
-output. It reaches only the member's page, in the answer to this read.
+output. It reaches only the member's page, in the answer to this read. The wallet
+shows it only when the request's receipt is the canonical's **current** state
+(§5 (5)) and its whole chain proves.
 
 ## 5. What the wallet proves
 
@@ -257,11 +263,13 @@ be confirmed".
 | `locked`                 | not eligible by the programme's count                                       |
 | `eligible_unconfirmed`   | the programme says eligible; the wallet cannot prove the pairs              |
 | `eligible`               | proven eligible; availability shown separately; next: the programme team    |
+| `already_redeemed`       | the programme records a verified redemption of it on this record before     |
 | `granted` / `expired`    | proven grant, current state `Benefit eligible`; expired after `valid_until` |
 | `requested`              | proven request adjacent to the grant; next: the partner                     |
 | `confirmation_recording` | the programme recorded the partner's confirmation, not yet on Dual          |
 | `confirmed`              | proven confirmation adjacent to the request; delivery not tracked           |
 | `settled`                | proven settlement adjacent to the confirmation (a record, not a payment)    |
+| `not_redeemable`         | proven, but a later change made it no longer the record's current state     |
 | `unconfirmed`            | any proof in the reward's chain fails                                       |
 
 `held` (canonical `Suspended`) and `ended` (`Expired`) hide every member
@@ -311,7 +319,8 @@ while one is unresolved. A refused request (an exact listed zero-write
 refusal) is settled as not submitted.
 
 A copied or re-shown reference is the same reference; it never creates an
-operation. `not_received` follows the same bound as an activity.
+operation, and a reused one is refused by the partner leg (no current request
+is left to confirm). `not_received` follows the same bound as an activity.
 
 ## 8. Wallet surfaces
 
@@ -349,4 +358,59 @@ operation. `not_received` follows the same bound as an activity.
 
 ## 10. Wallet implementation (source only)
 
-Listed when implemented.
+- **Domain.**
+  - `app/_domain/loyalty-benefits.ts`: the exact parsers, the allocation
+    tie, chain adjacency, eligibility from proven pairs and the
+    member-safe views.
+  - `app/_domain/loyalty.ts`: the binding key, the four host operations,
+    the reward receipt semantics, and the activity state gate with
+    `loyalty_activity_not_permitted`.
+  - `app/_domain/product-face-journal.ts`: operation
+    `loyalty.redemption.request`, with `benefitId`.
+- **BFF.**
+  - `api/product-face-loyalty-benefits.ts`: read, prepare, submit, status
+    and reference.
+  - `api/product-face-loyalty.ts`: the shared single dispatch
+    (`dispatchPrepared`) and the shared proofs.
+  - Route transitions `benefits`, `redeem_prepare`, `redeem_submit`,
+    `redeem_status` and `reference`.
+- **Page and Home.**
+  - `app/_components/products/loyalty-benefits.tsx`;
+  - `app/_components/products/loyalty-view.tsx` (the activity offered only
+    as §6 permits);
+  - `app/_components/host/loyalty-today.tsx` (one reward line);
+  - `app/_services/loyalty.client.ts` and the `loyalty.benefits` query.
+- **Tests.**
+  - `api/product-face-loyalty-benefits.test.ts`: real handlers over a
+    member-keyed FICTIONAL world with one shared stock ledger. It covers
+    progress versus proven eligibility; non-adjacent or reused pairs; stock
+    without proof coverage; two members and the last unit; the full grant,
+    request, reference, confirmation, settlement and reopen; a stranding
+    activity refused; a request lost whole; a failure after the write;
+    concurrent submits; a foreign binding in a status answer; a refusal
+    settled; and, never granted or never current:
+    - a forged current grant map;
+    - a wrong signer, object or action;
+    - an allocation backing another action or another intent;
+    - a missing allocation;
+    - a non-adjacent request;
+    - a historical grant naming another benefit;
+    - a stale reference;
+    - expired, held, recording and stranded rewards;
+    - another member's or another record's canonical;
+    - the reference kept out of the journal and cookies.
+  - `app/_domain/loyalty-benefits.test.ts`.
+  - `app/_components/products/loyalty-view.test.tsx`.
+- **Browser (FICTIONAL)**, `e2e/loyalty.spec.ts`: at phone width from the
+  keyboard:
+  - two verified activities;
+  - the operator's grant;
+  - one request whose whole answer is lost, then a reload with the old
+    cookies;
+  - the reference;
+  - a wrong, right and reused partner confirmation;
+  - settlement, then the Home card and a fresh reopen.
+
+  The fake runtime (`e2e/loyalty/fake-loyalty-runtime.mjs`) is not Studio.
+  The partner and operator are test hooks. Nothing physical is fulfilled or
+  claimed.

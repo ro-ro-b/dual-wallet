@@ -189,12 +189,13 @@ and reads `loyalty.activity.status`. Every other refusal below is only ever
 about an operation the runtime does not hold, so it means this operation
 wrote nothing and never will.
 
-| HTTP | `status`                                                                                        | Body                                                                                                                                       |
-| ---- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 200  | `activity_submitted`                                                                            | `submission {evidence_hash, activity_type, submitted_at}`, `canonical`, `action` (submit_activity), `accounting {1, "activity_submitted"}` |
-| 409  | `loyalty_activity_evidence_duplicate`, `loyalty_activity_type_unknown`, `membership_not_active` | `accounting {0, <status>}`                                                                                                                 |
-| 409  | `operation_already_received`                                                                    | `accounting {0, "operation_already_received"}`: not a refusal of the operation; the wallet keeps it unknown                                |
-| 202  | `outcome_unknown`                                                                               | `accounting {"unknown", "outcome_unknown"}`                                                                                                |
+| HTTP | `status`                                                                                        | Body                                                                                                                                              |
+| ---- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | `activity_submitted`                                                                            | `submission {evidence_hash, activity_type, submitted_at}`, `canonical`, `action` (submit_activity), `accounting {1, "activity_submitted"}`        |
+| 409  | `loyalty_activity_evidence_duplicate`, `loyalty_activity_type_unknown`, `membership_not_active` | `accounting {0, <status>}`                                                                                                                        |
+| 409  | `loyalty_activity_not_permitted`                                                                | `accounting {0, <status>}`: the state is not `Member` or `Activity verified` ([loyalty-benefit-redeem-v1](./loyalty-benefit-redeem-v1.md) §2 (3)) |
+| 409  | `operation_already_received`                                                                    | `accounting {0, "operation_already_received"}`: not a refusal of the operation; the wallet keeps it unknown                                       |
+| 202  | `outcome_unknown`                                                                               | `accounting {"unknown", "outcome_unknown"}`                                                                                                       |
 
 `evidence_hash` = `sha256:` + hex sha256 of the exact `evidence_ref` (the
 existing `loyaltyHash`). The wallet computes it itself.
@@ -376,7 +377,11 @@ Then:
   - `POST /api/faces/<slug>/loyalty`, with `transition` = `programme`, `join`,
     `membership`, `prepare`, `submit` or `status` (§6). Only `prepare`,
     `submit` and a `status` that closes this launch's own entry carry the
-    launch journal back.
+    launch journal back. `prepare` is refused
+    (`loyalty_activity_not_permitted`, nothing journalled) unless the
+    canonical `state` is `Member` or `Activity verified`. A binding with
+    `benefits` adds the transitions of
+    [loyalty-benefit-redeem-v1](./loyalty-benefit-redeem-v1.md).
   - A Today-first Home membership card.
   - No iframe.
 

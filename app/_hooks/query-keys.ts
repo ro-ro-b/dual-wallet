@@ -37,6 +37,8 @@ export const queryKeys = {
       ["loyalty", "programme", input] as const,
     membership: (input: { slug: string; walletId: string }) =>
       ["loyalty", "membership", input] as const,
+    benefits: (input: { slug: string; walletId: string }) =>
+      ["loyalty", "benefits", input] as const,
   },
   activity: {
     all: ["activity"] as const,

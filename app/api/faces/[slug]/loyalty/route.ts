@@ -9,6 +9,13 @@ import {
   submitActivity,
 } from "@/api/product-face-loyalty";
 import {
+  prepareRedemption,
+  readBenefits,
+  redemptionStatus,
+  showReference,
+  submitRedemption,
+} from "@/api/product-face-loyalty-benefits";
+import {
   faceContextError,
   faceResponse,
   resolveFaceRequest,
@@ -22,6 +29,12 @@ const KEYS = [
   "activity_type",
   "evidence_ref",
   "operation_id",
+  // loyalty-benefit-redeem-v1: ids only, never a reference.
+  "benefit_id",
+  "grant_action_id",
+  "allocation_id",
+  "revision_hash",
+  "request_action_id",
 ];
 
 // loyalty-join-earn-v1: the native Loyalty page's steps. The holder, wallet,
@@ -69,6 +82,20 @@ export async function POST(request: NextRequest, { params }: Params) {
           );
         case "status":
           return submissionStatus(context, body.operation_id);
+        case "benefits":
+          return readBenefits(context);
+        case "redeem_prepare":
+          return prepareRedemption(
+            context,
+            body.benefit_id,
+            body.grant_action_id,
+          );
+        case "redeem_submit":
+          return submitRedemption(context, body.operation_id, body);
+        case "redeem_status":
+          return redemptionStatus(context, body.operation_id);
+        case "reference":
+          return showReference(context, body.request_action_id);
         default:
           return undefined;
       }

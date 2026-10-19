@@ -1203,7 +1203,11 @@ describe("activity: submitted, then counted, only from proof of exactly this sub
 
   it("a duplicate is the runtime's exact zero-write refusal; a refusal without accounting stays unknown", async () => {
     const browser = await activeMember();
-    await submit(browser, "Workshop sign-in 0042");
+    const first = await submit(browser, "Workshop sign-in 0042");
+    // Verified, so the lifecycle offers a new activity again.
+    w.verify(
+      String((first.body.submission as Record<string, unknown>).operationId),
+    );
     const again = await submit(browser.reopen(), "Workshop sign-in 0042");
     expect(again.body).toEqual(
       expect.objectContaining({ code: "loyalty_activity_evidence_duplicate" }),
@@ -1505,6 +1509,8 @@ describe("a submission is in the browser's journal before it can leave (§6)", (
       expect.objectContaining({ status: "submitted" }),
     );
 
+    // Verified, so the lifecycle offers a new activity again.
+    w.verify(first);
     const second = preparedId(await prepare(browser, "Workshop sign-in 0043"));
     mockFault.afterDispatch = true;
     await submitPrepared(browser, second, "Workshop sign-in 0043", {

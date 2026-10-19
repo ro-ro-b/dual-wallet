@@ -32,6 +32,7 @@ import {
   parseProgrammeRead,
   parseStatusAnswer,
   parseSubmitAnswer,
+  SUBMITTABLE_STATES,
   validEvidenceRef,
   verificationFollows,
   writtenCustomPreimage,
@@ -50,6 +51,7 @@ import {
 import {
   applyJournalTransition,
   LOYALTY_DISPATCH_WINDOW_MS,
+  LOYALTY_REDEEM_OPERATION,
   LOYALTY_SUBMIT_OPERATION,
   loyaltySubmission,
   preparedLoyaltyStep,
@@ -84,13 +86,13 @@ export function loyaltyRules(context: FaceRequestContext): LoyaltyRules | null {
   return rules && loyaltyServedBy(context.binding) ? rules : null;
 }
 
-const operationIdOf = (prefix: "loy" | "lrd") =>
+export const operationIdOf = (prefix: "loy" | "lrd") =>
   `${prefix}-${randomBytes(12).toString("hex")}`;
 const HASH = /^sha256:[0-9a-f]{64}$/;
 /** §6: a `not_received` counts only once the original assertion expired. */
-const NOT_RECEIVED_AFTER_MS = 120_000;
+export const NOT_RECEIVED_AFTER_MS = 120_000;
 
-function proofContext(
+export function proofContext(
   context: FaceRequestContext,
   rules: LoyaltyRules,
 ): ProofContext {
@@ -103,14 +105,14 @@ function proofContext(
   };
 }
 
-type Answer =
+export type Answer =
   { reached: true; status: number; body: unknown } | { reached: false };
 type Called =
   | { ok: false; failure: FaceOperationFailure }
   | { ok: true; journal: FaceJournal; answer: Answer };
 
 /** One minted, operation-bound call to the bound Loyalty runtime. */
-async function call(
+export async function call(
   context: FaceRequestContext,
   journal: FaceJournal,
   rules: LoyaltyRules,
@@ -147,7 +149,7 @@ async function call(
   return { ok: true, journal: next, answer };
 }
 
-function applyIn(
+export function applyIn(
   journal: FaceJournal,
   transition: JournalTransition,
 ): FaceJournal | FaceOperationFailure {
@@ -161,24 +163,29 @@ function applyIn(
     : fail(result.error, journalStatus[result.error]);
 }
 
-const unavailable = () => fail("runtime_unavailable", 502);
+export const unavailable = () => fail("runtime_unavailable", 502);
 /** A failure to the browser without this request's journal. */
-const bare = ({ code, status }: FaceOperationFailure) => fail(code, status);
+export const bare = ({ code, status }: FaceOperationFailure) =>
+  fail(code, status);
 
 // ------------------------------------------------------------- proofs
 
-async function proveCanonical(canonical: CanonicalRead, proof: ProofContext) {
+export async function proveCanonical(
+  canonical: CanonicalRead,
+  proof: ProofContext,
+) {
   return (
     checkCanonical(canonical, await publicObject(canonical.objectId), proof) ===
     null
   );
 }
 
-async function proveReceipt(
+export async function proveReceipt(
   receipt: ActionReceipt,
   canonical: CanonicalRead,
   proof: ProofContext,
   evidenceHash?: string,
+  benefitId?: string,
 ) {
   const action = await publicAction(receipt.actionId);
   const affected = action?.affected.find(
@@ -200,6 +207,7 @@ async function proveReceipt(
         change,
       },
       evidenceHash,
+      benefitId,
     ) === null
   );
 }
@@ -363,10 +371,14 @@ export async function requestJoin(
 }
 
 /**
- * This wallet's own submissions for this programme, prepared or sent, here
- * and in other launches (a reload, a sign-in since).
+ * This wallet's own Loyalty steps of one operation (an activity submission,
+ * or a redemption request) for this programme, prepared or sent, here and in
+ * other launches (a reload, a sign-in since).
  */
-function ownSubmissions(context: FaceRequestContext) {
+export function ownLoyaltySteps(
+  context: FaceRequestContext,
+  operation: typeof LOYALTY_SUBMIT_OPERATION | typeof LOYALTY_REDEEM_OPERATION,
+) {
   const seen = new Set<string>();
   return [
     ...context.journal.entries,
@@ -374,6 +386,7 @@ function ownSubmissions(context: FaceRequestContext) {
   ].filter((entry) => {
     if (
       !loyaltySubmission(entry) ||
+      entry.operation !== operation ||
       // A refused or never-received submission wrote nothing: not listed.
       entry.status === "not_submitted" ||
       entry.slug !== context.binding.slug ||
@@ -386,32 +399,98 @@ function ownSubmissions(context: FaceRequestContext) {
   });
 }
 
+const ownSubmissions = (context: FaceRequestContext) =>
+  ownLoyaltySteps(context, LOYALTY_SUBMIT_OPERATION);
+
 /** Possibly sent and its outcome not proven: prepared, or issued and open. */
-const unresolved = (entry: FaceJournalEntry) =>
+export const unresolved = (entry: FaceJournalEntry) =>
   preparedLoyaltyStep(entry) || entry.phase === "assertion_issued";
 
-/** The one exact runtime request a submission is, bound at prepare. */
-function submitRequest(
+/** The one exact runtime request a Loyalty write is, bound at prepare. */
+export function loyaltyWriteRequest(
+  rules: LoyaltyRules,
+  operation: typeof LOYALTY_SUBMIT_OPERATION | typeof LOYALTY_REDEEM_OPERATION,
+  operationId: string,
+  objectId: string,
+  input: Record<string, unknown>,
+) {
+  const target = { model_id: rules.modelId, object_id: objectId };
+  return {
+    input,
+    requestHash: runtimeRequestHash({ operation, operationId, target, input }),
+  };
+}
+
+const submitRequest = (
   rules: LoyaltyRules,
   operationId: string,
   objectId: string,
   activityType: string,
   evidenceRef: string,
-) {
-  const target = { model_id: rules.modelId, object_id: objectId };
-  const input = { activity_type: activityType, evidence_ref: evidenceRef };
-  return {
-    input,
-    requestHash: runtimeRequestHash({
-      operation: LOYALTY_SUBMIT_OPERATION,
-      operationId,
-      target,
-      input,
-    }),
-  };
+) =>
+  loyaltyWriteRequest(rules, LOYALTY_SUBMIT_OPERATION, operationId, objectId, {
+    activity_type: activityType,
+    evidence_ref: evidenceRef,
+  });
+
+/**
+ * §6: dispatch exactly one prepared Loyalty write of THIS launch, once,
+ * within its window: never past it (its latest possible assertion stays
+ * bounded), never while another unresolved step of the same value exists,
+ * never twice on this instance. Its issue is journalled before it leaves.
+ */
+export async function dispatchPrepared(
+  context: FaceRequestContext,
+  rules: LoyaltyRules,
+  entry: FaceJournalEntry,
+  operation: typeof LOYALTY_SUBMIT_OPERATION | typeof LOYALTY_REDEEM_OPERATION,
+  write: { input: Record<string, unknown>; requestHash: string },
+  sameValue: (item: FaceJournalEntry) => boolean,
+  inProgress: "submission_in_progress" | "redemption_in_progress",
+): Promise<
+  | { ok: false; failure: FaceOperationFailure }
+  | { ok: true; journal: FaceJournal; answer: Answer }
+> {
+  if (Date.now() - entry.createdAt > LOYALTY_DISPATCH_WINDOW_MS) {
+    return { ok: false, failure: fail("submission_window_closed", 409) };
+  }
+  if (
+    ownLoyaltySteps(context, operation).some(
+      (item) =>
+        item.operationId !== entry.operationId &&
+        unresolved(item) &&
+        sameValue(item),
+    ) ||
+    // The same-instance double-submit damper (not idempotency, §6).
+    !claimIssue(
+      `${context.owner.sidHash}:${context.scope.launchId}:${entry.operationId}`,
+      Date.now(),
+    )
+  ) {
+    return { ok: false, failure: fail(inProgress, 409) };
+  }
+  const called = await call(
+    context,
+    context.journal,
+    rules,
+    operation,
+    entry.operationId,
+    entry.objectId,
+    write.input,
+    (minted) =>
+      applyIn(minted, {
+        kind: "issue",
+        operationId: entry.operationId,
+        objectId: entry.objectId,
+        requestHash: write.requestHash,
+      }),
+  );
+  // Nothing was dispatched by this request.
+  if (!called.ok) return { ok: false, failure: bare(called.failure) };
+  return { ok: true, journal: called.journal, answer: called.answer };
 }
 
-async function readMembership(
+export async function readMembership(
   context: FaceRequestContext,
   journal: FaceJournal,
   rules: LoyaltyRules,
@@ -448,6 +527,7 @@ export async function readMembershipView(context: FaceRequestContext): Promise<
   LoyaltyResult<{
     membership: LoyaltyMembershipView;
     submissions: Array<{ operationId: string; activityType: string }>;
+    benefits: boolean;
   }>
 > {
   const rules = loyaltyRules(context);
@@ -457,6 +537,8 @@ export async function readMembershipView(context: FaceRequestContext): Promise<
   return {
     ok: true,
     membership: read.proven.view,
+    // Whether this binding states loyalty-benefit-redeem-v1.
+    benefits: Boolean(rules.benefits),
     // Listed only: each status is proven by its own status read.
     submissions: ownSubmissions(context).map((entry) => ({
       operationId: entry.operationId,
@@ -474,7 +556,7 @@ const submissionView = (
   status,
 });
 
-function settled(
+export function settled(
   journal: FaceJournal,
   operationId: string,
   status: RegistrationStatus,
@@ -529,6 +611,11 @@ export async function prepareActivity(
   const canonical = membership.proven.canonical;
   if (membership.proven.view.status !== "active" || !canonical) {
     return fail("membership_not_active", 409);
+  }
+  // Never from a state where it would strand an unspent reward or a pending
+  // settlement, or that the lifecycle refuses (benefit-redeem §2 (3), §6).
+  if (!SUBMITTABLE_STATES.includes(String(canonical.custom.state))) {
+    return fail("loyalty_activity_not_permitted", 409);
   }
   const operationId = operationIdOf("loy");
   const { requestHash } = submitRequest(
@@ -622,44 +709,16 @@ export async function submitActivity(
   ) {
     return fail("operation_conflict", 409);
   }
-  // Past its window it is never minted, so its latest possible assertion
-  // stays bounded (§6); it is read back like any other, never sent.
-  if (Date.now() - entry.createdAt > LOYALTY_DISPATCH_WINDOW_MS) {
-    return fail("submission_window_closed", 409);
-  }
-  if (
-    ownSubmissions(context).some(
-      (item) =>
-        item.operationId !== operationId &&
-        unresolved(item) &&
-        item.evidenceHash === evidenceHash,
-    ) ||
-    // The same-instance double-submit damper (not idempotency, §6).
-    !claimIssue(
-      `${context.owner.sidHash}:${context.scope.launchId}:${operationId}`,
-      Date.now(),
-    )
-  ) {
-    return fail("submission_in_progress", 409);
-  }
-  const called = await call(
+  const called = await dispatchPrepared(
     context,
-    context.journal,
     rules,
+    entry,
     LOYALTY_SUBMIT_OPERATION,
-    operationId,
-    entry.objectId,
-    input,
-    (minted) =>
-      applyIn(minted, {
-        kind: "issue",
-        operationId,
-        objectId: entry.objectId,
-        requestHash,
-      }),
+    { input, requestHash },
+    (item) => item.evidenceHash === evidenceHash,
+    "submission_in_progress",
   );
-  // Nothing was dispatched by this request.
-  if (!called.ok) return bare(called.failure);
+  if (!called.ok) return called.failure;
   const journal = called.journal;
   const view = submissionView({ operationId, activityType: type }, "unknown");
   const unknown = { ok: true as const, journal, submission: view };
@@ -706,11 +765,14 @@ export async function submitActivity(
  * minted: its recorded issue, else (prepared, its submit answer perhaps
  * lost) the end of its dispatch window. Never the prepare time alone.
  */
-const latestAssertion = (entry: FaceJournalEntry) =>
+export const latestAssertion = (entry: FaceJournalEntry) =>
   entry.issuedAt ?? entry.createdAt + LOYALTY_DISPATCH_WINDOW_MS;
 
 /** This launch's own entry, closed as never received; else unchanged. */
-function closeNotReceived(journal: FaceJournal, entry: FaceJournalEntry) {
+export function closeNotReceived(
+  journal: FaceJournal,
+  entry: FaceJournalEntry,
+) {
   if (!journal.entries.some((item) => item.operationId === entry.operationId)) {
     return undefined;
   }

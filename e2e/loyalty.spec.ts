@@ -14,6 +14,8 @@ import {
 } from "./loyalty/environment.mjs";
 
 const { apiOrigin, runtimeOrigin } = loyaltyFixtureEnvironment();
+const WAITING_FOR_VERIFICATION =
+  "Waiting for the programme to verify your last activity. You can record another once it's verified.";
 const PAGE = `/products/${LOYALTY_SLUG}/loyalty`;
 
 async function post(origin: string, path: string, body: unknown = {}) {
@@ -181,14 +183,12 @@ test("a lost submission reply is unknown, never resent, and read back after a re
   await expect(
     page.getByText(/may have been sent, but its outcome isn't confirmed yet/),
   ).toBeVisible();
-  // The same evidence again is refused by the wallet; nothing is sent.
-  await page
-    .getByRole("textbox", { name: "What you did" })
-    .fill("Workshop sign-in 0042");
-  await page.getByRole("button", { name: "Submit activity" }).click();
+  // The runtime wrote it: no new activity is offered until it is verified
+  // (the BFF also refuses the same evidence while it is unresolved).
+  await expect(page.getByText(WAITING_FOR_VERIFICATION)).toBeVisible();
   await expect(
-    page.getByText("This activity was already sent. Check its status instead."),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Submit activity" }),
+  ).toHaveCount(0);
   expect((await counts())["loyalty.activity.submit"]).toBe(1);
 
   // Reloaded (a new launch): the original operation, read back only.
@@ -256,15 +256,13 @@ test("a wallet answer lost whole after the write (Set-Cookie included): the old 
   await context.clearCookies();
   await context.addCookies(jarAsSent!);
   await page.reload();
-  // The original operation is found, and only ever read back.
+  // The original operation is found, and only ever read back; nothing new
+  // is offered while it waits for verification.
   await expect(page.getByText("Not checked on this page yet.")).toBeVisible();
-  await page
-    .getByRole("textbox", { name: "What you did" })
-    .fill("Workshop sign-in 0042");
-  await page.getByRole("button", { name: "Submit activity" }).click();
+  await expect(page.getByText(WAITING_FOR_VERIFICATION)).toBeVisible();
   await expect(
-    page.getByText("This activity was already sent. Check its status instead."),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Submit activity" }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Check status" }).click();
   await expect(
     page.getByText("Submitted. Waiting for the programme to verify it."),
@@ -375,4 +373,168 @@ test("a membership without the member's own pass is not active, and nothing can 
   ).toHaveCount(0);
   // The fixture's record reference and object id are distinct identities.
   expect(RECORD_ID).not.toBe(CANON);
+});
+
+/** Two verified workshops, submitted from the page and verified by staff. */
+async function twoVerifiedActivities(page: Page) {
+  for (const evidence of ["Workshop sign-in 0101", "Workshop sign-in 0102"]) {
+    await page.getByRole("textbox", { name: "What you did" }).fill(evidence);
+    await page.getByRole("button", { name: "Submit activity" }).click();
+    await expect(page.getByText(WAITING_FOR_VERIFICATION)).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    await post(runtimeOrigin, "/__test__/verify");
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "Submit activity" }),
+    ).toBeVisible();
+  }
+}
+
+test("at phone width, from the keyboard: a granted reward, one request lost whole, the one-time reference, the partner's recorded confirmation, settlement and a fresh reopen", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const problems = watch(page);
+  await activeMember(page);
+  await twoVerifiedActivities(page);
+  const benefit = page
+    .getByRole("listitem")
+    .filter({ hasText: "A studio hour (fictional)" });
+  // Verified eligibility, availability and the next actor, each distinct.
+  await expect(
+    benefit.getByText("You've earned this. The programme team grants it."),
+  ).toBeVisible();
+  await expect(
+    benefit.getByText("Available now (programme record)."),
+  ).toBeVisible();
+  await expect(page.getByText("Next: the programme team.")).toBeVisible();
+  await expect(page.getByText(/2 of 2 verified/)).toBeVisible();
+
+  // The programme operator grants it, in its own session.
+  await post(runtimeOrigin, "/__test__/grant");
+  await page.reload();
+  const reward = page.getByRole("region", { name: "Your reward" });
+  await expect(
+    reward.getByText("Granted to you. Request it when you're ready."),
+  ).toBeVisible();
+  // Nothing that would strand it: no new activity is offered.
+  await expect(
+    page.getByRole("button", { name: "Submit activity" }),
+  ).toHaveCount(0);
+
+  // The member's one request; its whole answer (Set-Cookie too) is lost.
+  const loyaltyRoute = `**/api/faces/${LOYALTY_SLUG}/loyalty`;
+  let jarAsSent: Awaited<ReturnType<typeof context.cookies>> | undefined;
+  await page.route(loyaltyRoute, async (route) => {
+    const body = route.request().postDataJSON() as { transition?: string };
+    if (body?.transition !== "redeem_submit") return route.continue();
+    jarAsSent = await context.cookies();
+    await route.fetch();
+    await route.abort("connectionreset");
+  });
+  await page.locator("body").focus();
+  await tabTo(page, reward.getByRole("button", { name: "Request redemption" }));
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () => (await counts())["loyalty.redemption.request"])
+    .toBe(1);
+  const [original] = idsOf(await received(), "loyalty.redemption.request");
+  await expect(
+    page.getByText(/may have been sent, but its outcome isn't confirmed yet/),
+  ).toBeVisible();
+  await page.unroute(loyaltyRoute);
+  await context.clearCookies();
+  await context.addCookies(jarAsSent!);
+  await page.reload();
+  const requests = page.getByRole("region", {
+    name: "Redemption requests from this wallet",
+  });
+  await expect(
+    requests.getByText("Not checked on this page yet."),
+  ).toBeVisible();
+  await expect(
+    reward.getByText("Requested. Show your one-time reference to the partner."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Next: the partner confirms your redemption."),
+  ).toBeVisible();
+  await expect(
+    reward.getByRole("button", { name: "Request redemption" }),
+  ).toHaveCount(0);
+  await requests.getByRole("button", { name: "Check status" }).click();
+  await expect(requests.getByText("Requested.")).toBeVisible();
+
+  // The reference, only on the member's own action, from the keyboard.
+  await page.locator("body").focus();
+  await tabTo(
+    page,
+    reward.getByRole("button", { name: "Show my one-time reference" }),
+  );
+  await page.keyboard.press("Enter");
+  const shown = page.getByRole("region", { name: "Your one-time reference" });
+  await expect(shown).toBeVisible();
+  const code = (
+    await shown.locator(".loyalty-reference-code").innerText()
+  ).trim();
+  expect(code).toMatch(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
+  await noHorizontalOverflow(page);
+  // Never in a URL, a cookie or browser storage.
+  expect(page.url()).not.toContain(code);
+  expect(JSON.stringify(await context.cookies())).not.toContain(code);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify([{ ...localStorage }, { ...sessionStorage }]),
+    ),
+  ).not.toContain(code);
+
+  // The partner, in its own session: a wrong reference changes nothing;
+  // the member's reference confirms once; reused, it is refused.
+  const confirm = (reference: string) =>
+    fetch(`${runtimeOrigin}/__test__/partner/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ reference }),
+    });
+  expect((await confirm("AAAA-AAAA")).status).toBe(409);
+  expect((await confirm(code)).status).toBe(200);
+  expect((await confirm(code)).status).toBe(409);
+  await page.reload();
+  await expect(
+    reward.getByText("The partner recorded your redemption."),
+  ).toBeVisible();
+  await expect(reward.getByText(/doesn't track delivery/)).toBeVisible();
+  await expect(
+    reward.getByRole("button", { name: "Show my one-time reference" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Next: the programme records the partner settlement."),
+  ).toBeVisible();
+
+  // Settlement recorded; a fresh reopen shows the same outcome.
+  await post(runtimeOrigin, "/__test__/settle");
+  await page.goto("/");
+  const card = page.getByRole("region", { name: "Your membership" });
+  await expect(
+    card.getByText(
+      "A studio hour (fictional): Redeemed, and the programme recorded the partner settlement.",
+    ),
+  ).toBeVisible();
+  await expect(card.getByText(code)).toHaveCount(0);
+  await page.goto(PAGE);
+  await expect(
+    reward.getByText(
+      "Redeemed, and the programme recorded the partner settlement.",
+    ),
+  ).toBeVisible();
+  await expect(reward.getByText(/isn't a payment to you/)).toBeVisible();
+  // Nothing invented: no points, tier or balance anywhere.
+  await expect(page.getByText(/points|tier|balance/i)).toHaveCount(0);
+  const after = await received();
+  // One request, under its original id; every status read named that id.
+  expect(idsOf(after, "loyalty.redemption.request")).toEqual([original]);
+  expect(
+    idsOf(after, "loyalty.redemption.status").every((id) => id === original),
+  ).toBe(true);
+  await noHorizontalOverflow(page);
+  expect(problems).toEqual([]);
 });

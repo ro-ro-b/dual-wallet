@@ -31,6 +31,9 @@ const programme = {
   ],
 };
 let membership: Record<string, unknown>;
+/** loyalty-benefit-redeem-v1 on the binding, and the BFF's proven view. */
+let benefitsOn = false;
+let benefitsView: Record<string, unknown> | null = null;
 /** The submit step's answer is lost (a network failure after prepare). */
 let loseSubmit = false;
 const OPERATION = `loy-${"a1".repeat(12)}`;
@@ -40,6 +43,47 @@ const fetchMock = jest.fn(async (_url: string, init: RequestInit) => {
   sent.push(body);
   if (body.transition === "submit" && loseSubmit) {
     throw new TypeError("Failed to fetch");
+  }
+  if (body.transition === "benefits") {
+    const reply = {
+      benefits: benefitsView,
+      unconfirmed: false,
+      redemptions: [],
+    };
+    return { ok: true, status: 200, json: async () => reply } as Response;
+  }
+  if (body.transition === "reference") {
+    const reply = {
+      reference: { code: "K7QX-2MPD", requestActionId: body.request_action_id },
+    };
+    return { ok: true, status: 200, json: async () => reply } as Response;
+  }
+  if (
+    body.transition === "redeem_prepare" ||
+    body.transition === "redeem_submit"
+  ) {
+    const reply =
+      body.transition === "redeem_prepare"
+        ? {
+            prepared: {
+              operationId: OPERATION,
+              benefitId: "studio-hour",
+              binding: {
+                benefit_id: "studio-hour",
+                grant_action_id: "act-0007",
+                allocation_id: `alc_${"0".repeat(32)}`,
+                revision_hash: HASH,
+              },
+            },
+          }
+        : {
+            redemption: {
+              operationId: OPERATION,
+              benefitId: "studio-hour",
+              status: "requested",
+            },
+          };
+    return { ok: true, status: 200, json: async () => reply } as Response;
   }
   if (body.transition === "prepare" || body.transition === "submit") {
     const reply =
@@ -58,7 +102,7 @@ const fetchMock = jest.fn(async (_url: string, init: RequestInit) => {
     body.transition === "programme"
       ? { programme }
       : body.transition === "membership"
-        ? { membership, submissions: [] }
+        ? { membership, submissions: [], benefits: benefitsOn }
         : body.transition === "join"
           ? {
               join: {
@@ -82,6 +126,8 @@ beforeEach(() => {
   global.fetch = fetchMock as unknown as typeof fetch;
   membership = { status: "none" };
   loseSubmit = false;
+  benefitsOn = false;
+  benefitsView = null;
 });
 
 const view = () =>
@@ -215,4 +261,103 @@ it("a submit answer lost after prepare is shown as possibly sent under its opera
   ).toBeTruthy();
   expect(screen.queryByText(/Nothing new was recorded/)).toBeNull();
   expect(sent.filter((body) => body.transition === "submit")).toHaveLength(1);
+});
+
+const reward = (status: string, extra: Record<string, unknown> = {}) => ({
+  state: status === "granted" ? "Benefit eligible" : "Redemption pending",
+  held: false,
+  progress: [
+    {
+      ruleId: "two-workshops",
+      label: "Two verified workshops",
+      requiredVerified: 2,
+      verified: 2,
+      pendingVerification: 0,
+      benefitIds: ["studio-hour"],
+    },
+  ],
+  benefits: [
+    {
+      benefitId: "studio-hour",
+      title: "A studio hour",
+      description: "One hour in the open studio.",
+      terms: "Book at the desk.",
+      partnerName: "Harbour Workshop",
+      validDays: 30,
+      status,
+      availability: "available",
+    },
+  ],
+  reward: {
+    benefitId: "studio-hour",
+    status,
+    validUntil: "2026-11-18T09:00:00.000Z",
+    grantActionId: "act-0007",
+    requestActionId: status === "requested" ? "act-0008" : null,
+  },
+  actions: {
+    submitActivity: false,
+    requestRedemption: status === "granted",
+    showReference: status === "requested",
+  },
+  next: status === "requested" ? "partner" : null,
+  ...extra,
+});
+
+it("a granted reward offers its one request, and no activity that would strand it", async () => {
+  membership = {
+    ...activeMembership,
+    membership: { ...activeMembership.membership, state: "Benefit eligible" },
+  };
+  benefitsOn = true;
+  benefitsView = reward("granted");
+  const user = userEvent.setup();
+  view();
+  expect(
+    await screen.findByText(
+      "You have a reward to redeem. Request it before recording more activities.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Submit activity" })).toBeNull();
+  await user.dblClick(
+    await screen.findByRole("button", { name: "Request redemption" }),
+  );
+  await waitFor(() =>
+    expect(
+      sent.filter((body) => body.transition === "redeem_submit"),
+    ).toHaveLength(1),
+  );
+  expect(
+    sent.filter((body) => body.transition === "redeem_prepare"),
+  ).toHaveLength(1);
+  expect(await screen.findByText("Requested.")).toBeTruthy();
+});
+
+it("shows the one-time reference only on the member's action, and only in the page", async () => {
+  membership = {
+    ...activeMembership,
+    membership: { ...activeMembership.membership, state: "Redemption pending" },
+  };
+  benefitsOn = true;
+  benefitsView = reward("requested");
+  const user = userEvent.setup();
+  view();
+  expect(
+    await screen.findByText("Next: the partner confirms your redemption."),
+  ).toBeTruthy();
+  expect(screen.queryByText("K7QX-2MPD")).toBeNull();
+  expect(sent.some((body) => body.transition === "reference")).toBe(false);
+  await user.click(
+    screen.getByRole("button", { name: "Show my one-time reference" }),
+  );
+  expect(await screen.findByText("K7QX-2MPD")).toBeTruthy();
+  expect(
+    screen.getByText(/Show this to Harbour Workshop in person. It works once./),
+  ).toBeTruthy();
+  // Never kept anywhere but this component's state.
+  expect(JSON.stringify({ ...window.localStorage })).not.toContain("K7QX");
+  expect(JSON.stringify({ ...window.sessionStorage })).not.toContain("K7QX");
+  expect(window.location.href).not.toContain("K7QX");
+  await user.click(screen.getByRole("button", { name: "Hide reference" }));
+  expect(screen.queryByText("K7QX-2MPD")).toBeNull();
 });

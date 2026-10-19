@@ -14,7 +14,11 @@ import {
 import { loadProductFaceContext } from "@/app/_services/product-face.client";
 import { loadSession } from "@/app/_services/session.client";
 import { getTicket, listTicketsPage } from "@/app/_services/tickets.client";
-import { readMembership, readProgramme } from "@/app/_services/loyalty.client";
+import {
+  readBenefits,
+  readMembership,
+  readProgramme,
+} from "@/app/_services/loyalty.client";
 
 // ponytail: one fixed interval, no server-driven expiry hint. Shorten this if
 // the API refresh-token lifetime ever drops below ~10 minutes.
@@ -157,6 +161,30 @@ export function loyaltyProgrammeQueryOptions(input: {
     queryFn: walletId
       ? ({ signal }) => readProgramme({ slug, launchId }, signal)
       : skipToken,
+    staleTime: LOYALTY_STALE_MS,
+    retry: false,
+  });
+}
+
+/**
+ * loyalty-benefit-redeem-v1: the proven benefits view, only for a binding
+ * that states the extension and a created membership. Never the one-time
+ * reference: that is read on the member's explicit action and never cached.
+ */
+export function loyaltyBenefitsQueryOptions(input: {
+  slug: string;
+  launchId: string;
+  walletId?: string;
+  enabled: boolean;
+}) {
+  const { slug, launchId, walletId, enabled } = input;
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  return queryOptions({
+    queryKey: queryKeys.loyalty.benefits({ slug, walletId: walletId ?? "" }),
+    queryFn:
+      walletId && enabled
+        ? ({ signal }) => readBenefits({ slug, launchId }, signal)
+        : skipToken,
     staleTime: LOYALTY_STALE_MS,
     retry: false,
   });
