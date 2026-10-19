@@ -5,6 +5,7 @@
   },
   "common": {
     "brand": "Dual Wallet",
+    "brandHome": "{name} home",
     "smartObject": "Smart object",
     "loading": "Loading…",
     "tryAgain": "Try again",
@@ -812,7 +813,7 @@
     "status": {
       "pending_approval": "Your request to join is with the programme team.",
       "declined": "The programme team didn't approve this request.",
-      "pending_creation": "Approved. Your membership is being created.",
+      "pending_creation": "Approved. The programme team still needs to create your membership. You can record activities once it's created.",
       "pending_pass": "Your membership was created, but its pass isn't in your wallet yet. Check again later.",
       "active": "You're a member.",
       "held": "Your membership is on hold. Activities can't be recorded until the programme team reinstates it.",

@@ -75,6 +75,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const common = useTranslations("common");
   // A programme's product face uses the whole content area.
   const fullSize = /^\/products\/[^/]+/.test(pathname);
+  // A branded host's identity is the way back to its Today-first Home; the
+  // generic wallet has no such Home ("/" goes straight to inventory).
+  const homeHref = host ? "/" : undefined;
 
   useEffect(() => {
     if (isLoading || isAuthenticated) return;
@@ -127,7 +130,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {common("skipToContent")}
       </a>
       <aside className="sidebar">
-        <Brand host={host} />
+        <Brand host={host} home={homeHref} />
         <nav className="sidebar-nav" aria-label={t("mainNavigation")}>
           <Nav entries={entries} />
         </nav>
@@ -139,7 +142,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <div className="main">
         <header className="mobile-topbar">
-          <Brand host={host} />
+          <Brand host={host} home={homeHref} />
           <button
             ref={menuTrigger}
             className="icon-button"

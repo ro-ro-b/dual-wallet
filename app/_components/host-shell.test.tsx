@@ -82,6 +82,13 @@ describe("Brand", () => {
     );
   });
 
+  it("is a named Home link only when asked to be", () => {
+    render(<Brand host={MORROW} home="/" />);
+    const link = screen.getByRole("link", { name: "Morrow Home home" });
+    expect(link.getAttribute("href")).toBe("/");
+    expect(link.textContent).toBe("Morrow Home");
+  });
+
   it("is the host's name and pinned logo with one", () => {
     const { container } = render(<Brand host={MORROW} />);
     expect(container.textContent).toBe("Morrow Home");
@@ -128,6 +135,33 @@ describe("AppShell identity", () => {
     expect(
       screen.getByRole("button", { name: "Change color theme" }),
     ).toBeTruthy();
+  });
+
+  it("makes the host's mark and name the link back to its Home, on desktop and mobile", () => {
+    shell(MORROW);
+    const homes = screen.getAllByRole("link", { name: "Morrow Home home" });
+    expect(homes).toHaveLength(2);
+    expect(homes.map((link) => link.getAttribute("href"))).toEqual(["/", "/"]);
+    // One in the desktop sidebar, one in the mobile top bar; neither is a
+    // configured navigation entry.
+    expect(
+      within(document.querySelector("aside") as HTMLElement).getByRole("link", {
+        name: "Morrow Home home",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(document.querySelector(".mobile-topbar") as HTMLElement).getByRole(
+        "link",
+        { name: "Morrow Home home" },
+      ),
+    ).toBeTruthy();
+    expect(homes.every((link) => !link.closest("nav"))).toBe(true);
+  });
+
+  it("leaves the generic wallet's brand plain text, never a Home link", () => {
+    shell(null);
+    expect(screen.queryByRole("link", { name: /Dual Wallet/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /home/i })).toBeNull();
   });
 });
 

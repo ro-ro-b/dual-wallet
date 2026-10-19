@@ -122,7 +122,9 @@ test("at phone width, from the keyboard: consent, join, approval, membership, an
   await post(runtimeOrigin, "/__test__/approve");
   await page.reload();
   await expect(
-    page.getByText("Approved. Your membership is being created."),
+    page.getByText(
+      "Approved. The programme team still needs to create your membership. You can record activities once it's created.",
+    ),
   ).toBeVisible();
 
   // Created by the issuer, with the member's own pass: proven active.
@@ -299,6 +301,58 @@ test("a double click prepares once and sends that one operation once", async ({
   expect(steps).toEqual(["prepare", "submit"]);
   expect(idsOf(await received(), "loyalty.activity.submit")).toHaveLength(1);
   expect(problems).toEqual([]);
+});
+
+test("at phone width, from the keyboard: the membership page, the brand's Home link, the membership card, back again", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const problems = watch(page);
+  await activeMember(page);
+  // The one Home control on a phone: the mobile top bar's mark and name.
+  const home = page.getByRole("link", { name: "Harbour Nights home" });
+  await expect(home).toHaveCount(1);
+  await expect(home).toHaveAttribute("href", "/");
+  await page.locator("body").focus();
+  await tabTo(page, home);
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL("/");
+  const card = page.getByRole("region", { name: "Your membership" });
+  await expect(card.getByText("You're a member.")).toBeVisible();
+  const open = card.getByRole("link", { name: "Open your membership" });
+  await page.locator("body").focus();
+  await tabTo(page, open);
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(PAGE);
+  await expect(page.getByText("You're a member.")).toBeVisible();
+  await noHorizontalOverflow(page);
+  expect(problems).toEqual([]);
+});
+
+test("approved but not yet created: the programme team still has to create it, and nothing can be submitted", async ({
+  page,
+}) => {
+  await signInTo(page, PAGE);
+  await page.getByRole("checkbox", { name: /I agree to these terms/ }).check();
+  await page.getByRole("button", { name: "Join the programme" }).click();
+  await expect(
+    page.getByText("Your request to join is with the programme team."),
+  ).toBeVisible();
+  await post(runtimeOrigin, "/__test__/approve");
+  await page.reload();
+  await expect(
+    page.getByText(/The programme team still needs to create your membership/),
+  ).toBeVisible();
+  await expect(page.getByText(/being created/)).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Submit activity" }),
+  ).toHaveCount(0);
+  // The home's card says the same, and offers nothing more.
+  await page.goto("/");
+  const card = page.getByRole("region", { name: "Your membership" });
+  await expect(
+    card.getByText(/The programme team still needs to create your membership/),
+  ).toBeVisible();
 });
 
 test("a membership without the member's own pass is not active, and nothing can be submitted", async ({

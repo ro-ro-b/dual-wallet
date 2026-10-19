@@ -205,6 +205,10 @@ uses those tokens:
   provider clears the account's queries. A host without Tickets, and the
   signed-out home, are unchanged.
 - The shell shows exactly the configured navigation entries, in order.
+- The shell's mark and name are the link back to the host's Home (`/`), in
+  the desktop sidebar and the mobile top bar, named "<brand name> home". It
+  is not a navigation entry and changes no configured entry or order; the
+  generic wallet's brand stays plain text.
 - A journey's link is its start task in the first of the host's faces that
   backs it: registration `/register`, My products `/products`, service
   progress and quote decisions `/service`, transfer the face home.

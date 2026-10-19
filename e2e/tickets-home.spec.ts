@@ -336,6 +336,55 @@ test("at phone width the home and the ticket fit, with no horizontal scroll", as
   expect(seen.failedResponses).toEqual(["401 /api/session"]);
 });
 
+/** Tab from the top of the page until `target` has focus. */
+async function tabTo(page: Page, target: ReturnType<Page["getByRole"]>) {
+  await page.locator("body").focus();
+  for (let step = 0; step < 30; step++) {
+    if (
+      await target
+        .evaluate((element) => element === document.activeElement)
+        .catch(() => false)
+    ) {
+      return;
+    }
+    await page.keyboard.press("Tab");
+  }
+  await expect(target).toBeFocused();
+}
+
+test("at phone width, from the keyboard: a native ticket page, the brand's Home link, Today, the ticket again", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  const seen = watch(page);
+  await page.goto("/login");
+  await signIn(page);
+  await expect(page).toHaveURL("/");
+  for (const native of [detail(TICKET_IDS.today), LIST]) {
+    await page.goto(native);
+    // The one Home control on a phone: the mobile top bar's mark and name.
+    const home = page.getByRole("link", { name: "Harbour Nights home" });
+    await expect(home).toHaveCount(1);
+    await expect(home).toHaveAttribute("href", "/");
+    await tabTo(page, home);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL("/");
+    const todayLink = yourTickets(page)
+      .getByRole("region", { name: "Today" })
+      .getByRole("link");
+    await expect(todayLink).toContainText("Harbour Night");
+    await tabTo(page, todayLink);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(detail(TICKET_IDS.today));
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Harbour Night" }),
+    ).toBeVisible();
+    await noHorizontalOverflow(page);
+  }
+  expect(seen.problems).toEqual([]);
+  expect(seen.failedResponses).toEqual(["401 /api/session"]);
+});
+
 test("ticket cards keep a readable copy column at desktop and phone width, on the home and the full list", async ({
   page,
 }) => {
