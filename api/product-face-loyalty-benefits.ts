@@ -48,6 +48,7 @@ import {
   ruleProven,
   type Allocation,
   type BenefitsRead,
+  type FailedAttempt,
   type LoyaltyBenefitsView,
   type LoyaltyRedemptionStatus,
   type LoyaltyRedemptionView,
@@ -100,14 +101,40 @@ const bindingHash = (binding: RedemptionBinding) =>
 interface Chain {
   grant: ActionReceipt;
   allocation: Allocation;
+  failedAttempts: FailedAttempt[];
   request?: ActionReceipt;
   confirmation?: ActionReceipt;
+  fulfilment?: ActionReceipt;
   settlement?: ActionReceipt;
+}
+
+/** Every step after the grant, in order: earlier attempts, then the current. */
+function stepsOf(chain: Chain): ActionReceipt[] | undefined {
+  const current = [
+    chain.request,
+    chain.confirmation,
+    chain.fulfilment,
+    chain.settlement,
+  ];
+  // Each later step needs the one before it (a gap is never a chain).
+  const present = current.findLastIndex(Boolean);
+  if (current.slice(0, present + 1).some((step) => !step)) return undefined;
+  return [
+    ...chain.failedAttempts.flatMap((item) => [
+      item.request,
+      item.confirmation,
+      item.failure,
+    ]),
+    ...(current.slice(0, present + 1) as ActionReceipt[]),
+  ];
 }
 
 /**
  * §5 reward chain: the grant and its consumed allocation, then each present
- * step the very next change after the one before, every receipt proven.
+ * step the very next change after the one before, every receipt proven:
+ * each earlier attempt's request, confirmation and definitive failed
+ * handover, then the current attempt's request, confirmation, handover and
+ * settlement.
  */
 async function proveChain(
   chain: Chain,
@@ -116,7 +143,9 @@ async function proveChain(
   benefit: string,
 ) {
   const recordId = String(canonical.custom.recordId);
+  const steps = stepsOf(chain);
   if (
+    !steps ||
     !allocationBacksGrant(
       chain.allocation,
       chain.grant,
@@ -128,58 +157,47 @@ async function proveChain(
   ) {
     return false;
   }
-  if (
-    chain.request &&
-    !(
-      nextChange(chain.grant, chain.request) &&
-      (await proveReceipt(chain.request, canonical, proof, undefined, benefit))
-    )
-  ) {
-    return false;
+  let previous = chain.grant;
+  for (const step of steps) {
+    if (
+      !nextChange(previous, step) ||
+      !(await proveReceipt(step, canonical, proof, undefined, benefit))
+    ) {
+      return false;
+    }
+    previous = step;
   }
-  if (
-    chain.confirmation &&
-    !(
-      chain.request &&
-      nextChange(chain.request, chain.confirmation) &&
-      (await proveReceipt(
-        chain.confirmation,
-        canonical,
-        proof,
-        undefined,
-        benefit,
-      ))
-    )
-  ) {
-    return false;
-  }
-  return !(
-    chain.settlement &&
-    !(
-      chain.confirmation &&
-      nextChange(chain.confirmation, chain.settlement) &&
-      (await proveReceipt(chain.settlement, canonical, proof))
-    )
-  );
+  return true;
 }
 
 /**
  * The reward's status from its PROVEN chain and the canonical's current
  * state: a step offered to the member is always the record's current one.
+ * After a definitive failed handover the same reward is restored, until its
+ * original validity only.
  */
 function rewardStatus(
-  chain: Chain & { validUntil: string; confirmationRecording: boolean },
+  chain: Chain & {
+    validUntil: string;
+    confirmationRecording: boolean;
+    handoverRecording: boolean;
+  },
   canonical: CanonicalRead,
   now: number,
 ): RewardStatus {
   if (chain.settlement) return "settled";
-  if (chain.confirmation) return "confirmed";
+  if (chain.fulfilment) return "fulfilled";
+  if (chain.confirmation) {
+    return chain.handoverRecording ? "handover_recording" : "confirmed";
+  }
   if (chain.request) {
     if (!isCurrent(chain.request, canonical)) return "not_redeemable";
     return chain.confirmationRecording ? "confirmation_recording" : "requested";
   }
-  if (!isCurrent(chain.grant, canonical)) return "not_redeemable";
-  return now >= Date.parse(chain.validUntil) ? "expired" : "granted";
+  const failure = chain.failedAttempts.at(-1)?.failure;
+  if (!isCurrent(failure ?? chain.grant, canonical)) return "not_redeemable";
+  if (now >= Date.parse(chain.validUntil)) return "expired";
+  return failure ? "restored" : "granted";
 }
 
 /**
@@ -310,6 +328,7 @@ async function proveBenefits(
         chainProven && read.reward.request
           ? read.reward.request.actionId
           : null,
+      failedHandovers: chainProven ? read.reward.failedAttempts.length : 0,
     };
     if (chainProven) {
       binding = {
@@ -364,11 +383,20 @@ async function proveBenefits(
           ? reward?.status === "granted"
             ? null
             : "programme_team"
-          : state === "Redemption pending"
+          : state === "Redemption pending" || state === "Redeemed"
             ? "partner"
-            : state === "Redeemed"
+            : state === "Fulfilled"
               ? "settlement"
               : null;
+  // A restored reward needs a unit to hand over again: never offered when
+  // the programme says none is available (its refusal would write nothing).
+  const restoredOffer =
+    reward?.status === "restored" &&
+    benefits.some(
+      (item) =>
+        item.benefitId === reward?.benefitId &&
+        item.availability !== "unavailable",
+    );
   return {
     ok: true,
     unconfirmed: false,
@@ -390,7 +418,8 @@ async function proveBenefits(
       reward,
       actions: {
         submitActivity: !held && SUBMITTABLE_STATES.includes(state),
-        requestRedemption: !held && reward?.status === "granted",
+        requestRedemption:
+          !held && (reward?.status === "granted" || restoredOffer),
         showReference: !held && reward?.status === "requested",
       },
       next,
@@ -636,6 +665,7 @@ export async function submitRedemption(
       (await provenRequest(context, rules, entry, binding, answer.canonical, {
         grant: answer.grant,
         allocation: answer.allocation,
+        failedAttempts: answer.failedAttempts,
         request: answer.request,
       }));
     return proven
@@ -717,14 +747,22 @@ export async function redemptionStatus(
   }
   const registered = settled(called.journal, entry.operationId, "registered");
   if (registered !== called.journal) journal = registered;
+  // This operation's own attempt: an earlier one a definitive failure
+  // ended, or the current one at its proven step.
   return result(
-    answer.chain.settlement
-      ? "settled"
-      : answer.chain.confirmation
-        ? "confirmed"
-        : answer.kind === "confirmation_recording"
-          ? "confirmation_recording"
-          : "requested",
+    answer.kind === "fulfilment_failed"
+      ? "fulfilment_failed"
+      : answer.chain.settlement
+        ? "settled"
+        : answer.chain.fulfilment
+          ? "fulfilled"
+          : answer.chain.confirmation
+            ? answer.chain.handoverRecording
+              ? "handover_recording"
+              : "confirmed"
+            : answer.kind === "confirmation_recording"
+              ? "confirmation_recording"
+              : "requested",
   );
 }
 
@@ -778,6 +816,7 @@ export async function showReference(
       {
         grant: answer.grant,
         allocation: answer.allocation,
+        failedAttempts: answer.failedAttempts,
         request: answer.request,
       },
       answer.canonical,

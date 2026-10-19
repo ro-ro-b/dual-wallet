@@ -221,16 +221,29 @@ interface Reward {
   allocation: Record<string, unknown>;
   validUntil: string;
   eventId: string;
+  /** Earlier attempts a definitive failed handover ended (the same reward). */
+  failed: Array<{
+    request: Receipt;
+    confirmation: Receipt;
+    failure: Receipt;
+    requestEvent: string;
+  }>;
   request?: Receipt;
   requestEvent?: string;
   confirmation?: Receipt;
   recording?: boolean;
+  fulfilment?: Receipt;
+  handoverRecording?: boolean;
   settlement?: Receipt;
 }
 
 const BASE32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 /** The runtime's own record of one request operation (the r20 echo). */
-type Recorded = { binding: Record<string, unknown>; requestHash: string };
+type Recorded = {
+  binding: Record<string, unknown>;
+  requestHash: string;
+  requestEvent: string;
+};
 
 /**
  * A FICTIONAL programme world: each member's issuer-owned canonical record
@@ -266,6 +279,8 @@ function world() {
     currentOwner: string;
   }> = [];
   const ledger = new Map<string, Record<string, unknown>>();
+  /** Units a definitive failure returned to stock (each exactly once). */
+  const returned = new Set<string>();
   const stock: Record<string, number> = { [BENEFIT]: 1 };
   let stockStatus: string | null = null;
   const members = Object.fromEntries(
@@ -406,18 +421,32 @@ function world() {
   };
   const counts = (benefit: string) => {
     let used = 0;
-    for (const allocation of ledger.values()) {
-      if (allocation.benefit_id === benefit) used += 1;
+    for (const [id, allocation] of ledger) {
+      // A unit a definitive failure returned is stock again (exactly once).
+      if (allocation.benefit_id === benefit && !returned.has(id)) used += 1;
     }
     return used;
   };
   const chainOf = (reward: Reward, requestKey: "request" | "action") => ({
     grant: reward.grant,
     allocation: reward.allocation,
+    ...(reward.failed.length
+      ? {
+          failed_attempts: reward.failed.map((item) => ({
+            request: item.request,
+            confirmation: item.confirmation,
+            failure: item.failure,
+          })),
+        }
+      : {}),
     ...(reward.request ? { [requestKey]: reward.request } : {}),
     ...(reward.confirmation ? { confirmation: reward.confirmation } : {}),
     ...(reward.recording && !reward.confirmation
       ? { confirmation_recording: true }
+      : {}),
+    ...(reward.fulfilment ? { fulfilment: reward.fulfilment } : {}),
+    ...(reward.handoverRecording && reward.confirmation && !reward.fulfilment
+      ? { handover_recording: true }
       : {}),
     ...(reward.settlement ? { settlement: reward.settlement } : {}),
   });
@@ -540,6 +569,7 @@ function world() {
         allocation,
         eventId,
         validUntil: new Date(Date.now() + 30 * DAY).toISOString(),
+        failed: [],
       };
       return "granted";
     },
@@ -569,6 +599,68 @@ function world() {
     /** The programme records the partner's confirmation, not yet on Dual. */
     recording(who: Who) {
       members[who].reward!.recording = true;
+    },
+    /** The partner records the handover in its own session. */
+    fulfil(who: Who) {
+      const reward = members[who].reward!;
+      if (stateOf(who) !== "Redeemed") return "not_permitted";
+      reward.fulfilment = act(
+        MEMBERS[who].canon,
+        "update",
+        {
+          ...base(who, "Fulfilled", reward.benefitId),
+          ...step("record_fulfilment", "Fulfilled", `evt-fulfil-${counter}`, [
+            `benefitReference:${reward.benefitId}`,
+          ]),
+        },
+        "record_fulfilment",
+      );
+      return "fulfilled";
+    },
+    /**
+     * The partner's definitive failed handover: the same reward restored for a
+     * new request; an available unit is stock again, a damaged one never.
+     */
+    fail(who: Who, disposition: "available" | "damaged" = "available") {
+      const reward = members[who].reward!;
+      if (stateOf(who) !== "Redeemed") return "not_permitted";
+      const failure = act(
+        MEMBERS[who].canon,
+        "update",
+        {
+          ...base(who, "Fulfilment failed", reward.benefitId),
+          ...step(
+            "fail_fulfilment",
+            "Fulfilment failed",
+            `evt-fail-${counter}`,
+            [
+              `benefitReference:${reward.benefitId}`,
+              "failureReason:not_handed_over",
+            ],
+          ),
+        },
+        "fail_fulfilment",
+      );
+      reward.failed.push({
+        request: reward.request!,
+        confirmation: reward.confirmation!,
+        failure,
+        requestEvent: reward.requestEvent!,
+      });
+      const unit =
+        [...ledger].find(
+          ([, item]) => item.attempt === reward.requestEvent,
+        )?.[0] ?? String(reward.allocation.allocation_id);
+      if (disposition === "available") returned.add(unit);
+      delete reward.request;
+      delete reward.requestEvent;
+      delete reward.confirmation;
+      delete reward.recording;
+      return "failed";
+    },
+    /** The partner's handover outcome is recorded, not yet on Dual. */
+    handoverRecording(who: Who) {
+      members[who].reward!.handoverRecording = true;
     },
     settle(who: Who) {
       const reward = members[who].reward!;
@@ -714,7 +806,13 @@ function world() {
               number,
               unknown,
             ];
-          if (stateOf(who) !== "Benefit eligible" || !reward) {
+          // A first request, or a new one of the same reward a definitive
+          // failed handover restored.
+          const restored =
+            stateOf(who) === "Fulfilment failed" &&
+            Boolean(reward?.failed.length) &&
+            !reward?.request;
+          if ((stateOf(who) !== "Benefit eligible" && !restored) || !reward) {
             return refuse("loyalty_redemption_not_permitted");
           }
           if (canonicalJson(input) !== canonicalJson(binding(reward))) {
@@ -724,6 +822,16 @@ function world() {
             return refuse("loyalty_reward_expired");
           }
           const eventId = `evt-request-${counter}`;
+          // A restored reward's attempt needs its own unit, reserved now.
+          if (restored) {
+            if (counts(reward.benefitId) >= (stock[reward.benefitId] ?? 0)) {
+              return refuse("loyalty_benefit_stock_exhausted");
+            }
+            ledger.set(`retry-${eventId}`, {
+              benefit_id: reward.benefitId,
+              attempt: eventId,
+            });
+          }
           reward.request = act(
             MEMBERS[who].canon,
             "update",
@@ -735,6 +843,7 @@ function world() {
           );
           reward.requestEvent = eventId;
           member.requests.set(operationId, {
+            requestEvent: eventId,
             binding: binding(reward),
             requestHash: sha(
               canonicalJson({
@@ -756,6 +865,9 @@ function world() {
               canonical: canonicalRead(who),
               grant: reward.grant,
               allocation: reward.allocation,
+              ...(reward.failed.length
+                ? { failed_attempts: chainOf(reward, "action").failed_attempts }
+                : {}),
               action: reward.request,
               accounting: { dual_writes: 1, reason: "redemption_requested" },
             },
@@ -775,15 +887,26 @@ function world() {
               },
             ];
           }
+          // This operation's own attempt: an earlier one a definitive failure
+          // ended, or the current one.
+          const failedAt = reward.failed.findIndex(
+            (item) => item.requestEvent === held.requestEvent,
+          );
           return [
             200,
             {
               ok: true,
-              status: reward.confirmation
-                ? "confirmed"
-                : reward.recording
-                  ? "confirmation_recording"
-                  : "requested",
+              status:
+                failedAt >= 0
+                  ? "fulfilment_failed"
+                  : reward.fulfilment
+                    ? "fulfilled"
+                    : reward.confirmation
+                      ? "confirmed"
+                      : reward.recording
+                        ? "confirmation_recording"
+                        : "requested",
+              ...(failedAt >= 0 ? { failed_attempt: failedAt } : {}),
               operation_id: operationId,
               request_hash: held.requestHash,
               binding: held.binding,
@@ -818,6 +941,9 @@ function world() {
               canonical: canonicalRead(who),
               grant: reward.grant,
               allocation: reward.allocation,
+              ...(reward.failed.length
+                ? { failed_attempts: chainOf(reward, "action").failed_attempts }
+                : {}),
               action: reward.request,
               accounting: zero("reference_shown"),
             },
@@ -1231,11 +1357,21 @@ describe("an operator-granted reward, redeemed once through the partner", () => 
     );
     view = await viewOf(browser);
     expect(view.reward!.status).toBe("confirmed");
-    expect(view.next).toBe("settlement");
+    // A confirmation is not the handover: the partner records it next.
+    expect(view.next).toBe("partner");
     // The reference is gone once confirmed.
     expect((await showReference(browser)).status).toBe(409);
     expect(await statusOf(browser, operationOf(prepared))).toEqual(
       expect.objectContaining({ status: "confirmed" }),
+    );
+
+    expect(w.fulfil("a")).toBe("fulfilled");
+    view = await viewOf(browser);
+    expect(view.reward!.status).toBe("fulfilled");
+    expect(view.next).toBe("settlement");
+    expect(view.actions.submitActivity).toBe(false);
+    expect(await statusOf(browser, operationOf(prepared))).toEqual(
+      expect.objectContaining({ status: "fulfilled" }),
     );
 
     w.settle("a");
@@ -1266,6 +1402,190 @@ describe("an operator-granted reward, redeemed once through the partner", () => 
     expect(
       (await browser.loyalty({ transition: "membership" })).body.submissions,
     ).toEqual([]);
+  });
+});
+
+describe("the partner's handover, or its definitive failure restoring the same reward", () => {
+  /** Granted, requested, the reference shown and confirmed by the partner. */
+  async function confirmed(browser: Browser) {
+    const prepared = await prepareRequest(browser);
+    expect((await submitPrepared(browser, prepared)).body.redemption).toEqual(
+      expect.objectContaining({ status: "requested" }),
+    );
+    const code = (
+      (await showReference(browser)).body.reference as Record<string, string>
+    ).code;
+    expect(w.partnerConfirm("a", code)).toBe("confirmed");
+    return { prepared, code };
+  }
+
+  it("a definitive failed handover restores the same reward until its original validity; the new request is proven through the earlier attempt, and the original operation reads its own failure", async () => {
+    const browser = await granted();
+    const before = await viewOf(browser);
+    const first = await confirmed(browser);
+    expect(w.fail("a", "available")).toBe("failed");
+    let view = await viewOf(browser);
+    expect(view.reward).toEqual({
+      benefitId: BENEFIT,
+      status: "restored",
+      // The same grant and its original validity, never extended.
+      validUntil: before.reward!.validUntil,
+      grantActionId: before.reward!.grantActionId,
+      requestActionId: null,
+      failedHandovers: 1,
+    });
+    expect(view.state).toBe("Fulfilment failed");
+    expect(view.actions).toEqual({
+      submitActivity: false,
+      requestRedemption: true,
+      showReference: false,
+    });
+    expect(view.next).toBeNull();
+    // The original operation's own outcome, read back, never re-sent.
+    expect(await statusOf(browser, operationOf(first.prepared))).toEqual(
+      expect.objectContaining({ status: "fulfilment_failed" }),
+    );
+    expect(writes("loyalty.redemption.request")).toHaveLength(1);
+
+    // A new request of the same grant: its own operation, unit and reference.
+    const second = await prepareRequest(browser);
+    expect(second.status).toBe(200);
+    expect(operationOf(second)).not.toBe(operationOf(first.prepared));
+    expect((await submitPrepared(browser, second)).body.redemption).toEqual(
+      expect.objectContaining({ status: "requested" }),
+    );
+    expect(writes("loyalty.redemption.request")).toHaveLength(2);
+    view = await viewOf(browser);
+    expect(view.reward!.status).toBe("requested");
+    expect(view.reward!.failedHandovers).toBe(1);
+    const code = (
+      (await showReference(browser)).body.reference as Record<string, string>
+    ).code;
+    expect(code).not.toBe(first.code);
+    expect(w.partnerConfirm("a", first.code)).toBe(
+      "loyalty_redemption_reference_invalid",
+    );
+    expect(w.partnerConfirm("a", code)).toBe("confirmed");
+    expect(w.fulfil("a")).toBe("fulfilled");
+    w.settle("a");
+    view = await viewOf(browser.reopen());
+    expect(view.reward!.status).toBe("settled");
+    expect(view.reward!.failedHandovers).toBe(1);
+    // Each operation keeps its own outcome.
+    expect(await statusOf(browser, operationOf(first.prepared))).toEqual(
+      expect.objectContaining({ status: "fulfilment_failed" }),
+    );
+    expect(await statusOf(browser, operationOf(second))).toEqual(
+      expect.objectContaining({ status: "settled" }),
+    );
+  });
+
+  it("a damaged unit never returns: the restored reward is kept, never offered, and nothing is sent", async () => {
+    const browser = await granted();
+    await confirmed(browser);
+    expect(w.fail("a", "damaged")).toBe("failed");
+    const view = await viewOf(browser);
+    expect(view.reward!.status).toBe("restored");
+    expect(view.benefits[0].availability).toBe("unavailable");
+    expect(view.actions.requestRedemption).toBe(false);
+    const refused = await prepareRequest(browser);
+    expect(refused.body).toEqual(
+      expect.objectContaining({ code: "loyalty_redemption_not_permitted" }),
+    );
+    expect(writes("loyalty.redemption.request")).toHaveLength(1);
+  });
+
+  it("the runtime's stock refusal of a restored reward's request is an exact zero-write refusal, settled as never sent", async () => {
+    const browser = await granted();
+    await confirmed(browser);
+    expect(w.fail("a", "available")).toBe("failed");
+    const prepared = await prepareRequest(browser);
+    expect(prepared.status).toBe(200);
+    // Another member is granted the returned unit between the read and the send.
+    w.enrol("b");
+    w.verifiedActivity("b", "Workshop sign-in b-1");
+    w.verifiedActivity("b", "Workshop sign-in b-2");
+    expect(w.grant("b")).toBe("granted");
+    const changes = w.changes.length;
+    const sent = await submitPrepared(browser, prepared);
+    expect(sent.body).toEqual(
+      expect.objectContaining({ code: "loyalty_benefit_stock_exhausted" }),
+    );
+    expect(writes("loyalty.redemption.request")).toHaveLength(2);
+    // Nothing was written; the reward stays the member's, kept, not offered.
+    expect(w.changes.length).toBe(changes);
+    expect(w.stateOf("a")).toBe("Fulfilment failed");
+    const view = await viewOf(browser);
+    expect(view.reward!.status).toBe("restored");
+    expect(view.actions.requestRedemption).toBe(false);
+    // Settled as never sent: only the first, failed attempt stays listed.
+    expect(
+      (await benefitsOf(browser)).redemptions.map((item) => item.operationId),
+    ).not.toContain(operationOf(prepared));
+  });
+
+  it("an unknown handover outcome is held: never handed over, never restored, nothing offered", async () => {
+    const browser = await granted();
+    const { prepared } = await confirmed(browser);
+    w.handoverRecording("a");
+    const view = await viewOf(browser);
+    expect(view.reward!.status).toBe("handover_recording");
+    expect(view.actions).toEqual({
+      submitActivity: false,
+      requestRedemption: false,
+      showReference: false,
+    });
+    expect(await statusOf(browser, operationOf(prepared))).toEqual(
+      expect.objectContaining({ status: "handover_recording" }),
+    );
+  });
+
+  it("a settlement without the partner's handover, or a failure that is not the definitive one, is never proven", async () => {
+    const browser = await granted();
+    const { prepared } = await confirmed(browser);
+    expect(w.fulfil("a")).toBe("fulfilled");
+    w.settle("a");
+    // The answer drops the handover: a settlement straight after a confirmation.
+    rewrite = (operation, [status, body]) => {
+      if (
+        operation !== "loyalty.benefits.read" &&
+        operation !== "loyalty.redemption.status"
+      )
+        return [status, body];
+      const copy = JSON.parse(JSON.stringify(body));
+      const chain = operation === "loyalty.benefits.read" ? copy.reward : copy;
+      delete chain.fulfilment;
+      if (operation === "loyalty.redemption.status") copy.status = "confirmed";
+      return [status, copy];
+    };
+    // Not a reward chain at all: the read supplies nothing, the status nothing.
+    const read = await browser.loyalty({ transition: "benefits" });
+    expect(read.status).toBe(502);
+    expect(read.body.benefits).toBeUndefined();
+    expect(await statusOf(browser, operationOf(prepared))).toEqual(
+      expect.objectContaining({ status: "unknown" }),
+    );
+    rewrite = (_operation, answer) => answer;
+  });
+
+  it("a failure receipt without the definitive reason never restores the reward", async () => {
+    const browser = await granted();
+    await confirmed(browser);
+    expect(w.fail("a", "available")).toBe("failed");
+    rewrite = (operation, [status, body]) => {
+      if (operation !== "loyalty.benefits.read") return [status, body];
+      const copy = JSON.parse(JSON.stringify(body));
+      const failure = copy.reward.failed_attempts[0].failure;
+      failure.written_custom.proof_event.public_fields =
+        failure.written_custom.proof_event.public_fields.filter(
+          (field: string) => !field.startsWith("failureReason:"),
+        );
+      return [status, copy];
+    };
+    const view = await viewOf(browser);
+    expect(view.reward!.status).toBe("unconfirmed");
+    expect(view.actions.requestRedemption).toBe(false);
+    rewrite = (_operation, answer) => answer;
   });
 });
 

@@ -878,6 +878,7 @@
       "loyalty_reward_expired": "This reward has expired. Nothing was recorded.",
       "loyalty_reward_unverified": "This reward can't be verified right now. Nothing was recorded.",
       "loyalty_redemption_already_requested": "This reward was already requested. Nothing new was recorded.",
+      "loyalty_benefit_stock_exhausted": "None of this benefit is available to hand over right now. Your reward is kept until it expires. Nothing was recorded.",
       "loyalty_redemption_not_current": "There's no current request to show a reference for.",
       "loyalty_activity_not_permitted": "An activity can't be recorded right now. Nothing was sent."
     },
@@ -885,7 +886,9 @@
       "activity_pending": "Waiting for the programme to verify your last activity. You can record another once it's verified.",
       "benefit_eligible": "You have a reward to redeem. Request it before recording more activities.",
       "redemption_pending": "Your redemption is with the partner. You can record more activities once it's settled.",
-      "redeemed": "The partner recorded your redemption. The programme records the settlement before you can record more activities.",
+      "redeemed": "The partner confirmed your redemption. They record the handover, then the programme records the settlement, before you can record more activities.",
+      "fulfilled": "Your benefit was handed over. The programme records the settlement before you can record more activities.",
+      "fulfilment_failed": "Your reward is kept for you after a handover that didn't happen. Request it again before recording more activities.",
       "other": "An activity can't be recorded right now."
     },
     "benefits": {
@@ -906,8 +909,11 @@
         "expired": "This reward has expired. Contact the programme team.",
         "requested": "Requested. Show your one-time reference to the partner.",
         "confirmation_recording": "The partner's confirmation is being recorded. It isn't confirmed yet.",
-        "confirmed": "The partner recorded your redemption.",
-        "settled": "Redeemed, and the programme recorded the partner settlement.",
+        "confirmed": "The partner confirmed your reference. They record the handover next.",
+        "handover_recording": "The partner's handover is being recorded. It isn't confirmed yet.",
+        "fulfilled": "Handed over: the partner recorded that you received it.",
+        "restored": "The partner couldn't hand this over, so your reward is kept for you. Request it again when you're ready.",
+        "settled": "Handed over, and the programme recorded the partner settlement.",
         "not_redeemable": "This reward can't be redeemed here after a later change. Contact the programme team.",
         "unconfirmed": "This reward can't be confirmed right now. Nothing has been changed."
       },
@@ -919,7 +925,7 @@
       "next": {
         "verifier": "Next: the programme verifies your last activity.",
         "programme_team": "Next: the programme team.",
-        "partner": "Next: the partner confirms your redemption.",
+        "partner": "Next: the partner confirms your reference and records the handover.",
         "settlement": "Next: the programme records the partner settlement."
       },
       "rewardTitle": "Your reward",
@@ -932,7 +938,10 @@
       "referenceLabel": "Your one-time reference",
       "referenceNote": "Show this to {partner} in person. It works once. Don't share it anywhere else.",
       "referenceNoteInHouse": "Show this to the programme team in person. It works once. Don't share it anywhere else.",
-      "fulfilment": "This wallet doesn't track delivery. If you didn't receive the benefit, contact the programme team with the date of your redemption.",
+      "fulfilment": "The handover is the partner's record. If you didn't receive the benefit, contact the programme team with the date of your redemption.",
+      "handoverNote": "If the partner can't hand it over, your reward is kept for you until it expires.",
+      "restoredUnavailable": "None is available to hand over right now (programme record). Your reward stays yours until it expires.",
+      "failedHandovers": "Earlier handovers that didn't happen: {count}. Your reward was kept each time.",
       "settlementNote": "Settlement is the programme's record with the partner. It isn't a payment to you.",
       "heldNote": "Your membership is on hold. The programme team decides what happens to this reward.",
       "unconfirmedAll": "Your benefits can't be confirmed right now. Nothing has been changed.",
@@ -942,8 +951,11 @@
       "request_status": {
         "requested": "Requested.",
         "confirmation_recording": "The partner's confirmation is being recorded.",
-        "confirmed": "The partner recorded this redemption.",
-        "settled": "Redeemed and settled.",
+        "confirmed": "The partner confirmed this redemption.",
+        "handover_recording": "The partner's handover is being recorded.",
+        "fulfilled": "Handed over.",
+        "fulfilment_failed": "The partner couldn't hand this over. Your reward was kept for a new request.",
+        "settled": "Handed over and settled.",
         "unknown": "This may have been sent, but its outcome isn't confirmed yet. It won't be sent again.",
         "not_received": "The programme didn't receive this request. Nothing was recorded.",
         "unconfirmed": "The programme answered, but this couldn't be confirmed. It won't be sent again.",

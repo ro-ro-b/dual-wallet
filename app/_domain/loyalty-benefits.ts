@@ -30,6 +30,8 @@ export const REDEMPTION_REFERENCE = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
 const MAX_BENEFITS = 12;
 const MAX_RULES = 8;
 export const MAX_VERIFIED_ACTIVITIES = 100;
+/** Earlier handover attempts of one reward a read may carry (§4.1). */
+export const MAX_FAILED_ATTEMPTS = 50;
 
 const STOCK_STATUSES = [
   "available",
@@ -113,17 +115,33 @@ export interface VerifiedActivity {
   verification: ActionReceipt;
 }
 
+/**
+ * One earlier handover attempt of the same reward that a definitive failure
+ * ended (§2 (5)): the member's request, the partner's confirmation and the
+ * partner's failed handover, each the very next change after the one before.
+ */
+export interface FailedAttempt {
+  request: ActionReceipt;
+  confirmation: ActionReceipt;
+  failure: ActionReceipt;
+}
+
 /** The record's latest grant and what followed it (Dual receipts). */
 export interface RewardChain {
   benefitId: string;
   grant: ActionReceipt;
   allocation: Allocation;
-  /** APPLICATION: grant time + the benefit's valid days. */
+  /** APPLICATION: grant time + the benefit's valid days (never extended). */
   validUntil: string;
+  /** Earlier attempts, oldest first; the reward restored after each. */
+  failedAttempts: FailedAttempt[];
   request?: ActionReceipt;
   confirmation?: ActionReceipt;
   /** APPLICATION: the partner's confirmation is recorded, not yet on Dual. */
   confirmationRecording: boolean;
+  fulfilment?: ActionReceipt;
+  /** APPLICATION: the partner's handover outcome is recorded, not yet on Dual. */
+  handoverRecording: boolean;
   settlement?: ActionReceipt;
 }
 
@@ -314,6 +332,24 @@ function parseVerifiedActivity(value: unknown): VerifiedActivity | undefined {
     : undefined;
 }
 
+function parseFailedAttempt(value: unknown): FailedAttempt | undefined {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["request", "confirmation", "failure"])
+  ) {
+    return undefined;
+  }
+  const request = parseActionReceipt(value.request, "request_redemption");
+  const confirmation = parseActionReceipt(
+    value.confirmation,
+    "confirm_redemption",
+  );
+  const failure = parseActionReceipt(value.failure, "fail_fulfilment");
+  return request && confirmation && failure
+    ? { request, confirmation, failure }
+    : undefined;
+}
+
 /** The grant, its allocation and the steps that followed it, exactly. */
 function parseChain(
   value: Record<string, unknown>,
@@ -321,6 +357,9 @@ function parseChain(
 ): Omit<RewardChain, "benefitId" | "validUntil"> | undefined {
   const grant = parseActionReceipt(value.grant, "unlock_benefit");
   const allocation = parseAllocation(value.allocation);
+  const failedAttempts = Array.isArray(value.failed_attempts)
+    ? value.failed_attempts.map(parseFailedAttempt)
+    : [];
   const request =
     value.request === undefined && value.action === undefined
       ? undefined
@@ -329,6 +368,10 @@ function parseChain(
     value.confirmation === undefined
       ? undefined
       : parseActionReceipt(value.confirmation, "confirm_redemption");
+  const fulfilment =
+    value.fulfilment === undefined
+      ? undefined
+      : parseActionReceipt(value.fulfilment, "record_fulfilment");
   const settlement =
     value.settlement === undefined
       ? undefined
@@ -336,15 +379,26 @@ function parseChain(
   if (
     !grant ||
     !allocation ||
+    // Present only with at least one attempt; every attempt complete.
+    (value.failed_attempts !== undefined &&
+      (!Array.isArray(value.failed_attempts) ||
+        !value.failed_attempts.length ||
+        value.failed_attempts.length > MAX_FAILED_ATTEMPTS ||
+        failedAttempts.some((item) => !item))) ||
     (value.request !== undefined && value.action !== undefined) ||
     ((value.request !== undefined || value.action !== undefined) && !request) ||
     (value.confirmation !== undefined && !confirmation) ||
+    (value.fulfilment !== undefined && !fulfilment) ||
     (value.settlement !== undefined && !settlement) ||
-    // Each later step needs the one before it.
+    // Each later step needs the one before it; settlement only after the
+    // partner's verified handover.
     (confirmation && !request) ||
-    (settlement && !confirmation) ||
+    (fulfilment && !confirmation) ||
+    (settlement && !fulfilment) ||
     (value.confirmation_recording !== undefined &&
       (value.confirmation_recording !== true || !request || confirmation)) ||
+    (value.handover_recording !== undefined &&
+      (value.handover_recording !== true || !confirmation || fulfilment)) ||
     (withValidity && !iso(value.valid_until))
   ) {
     return undefined;
@@ -352,9 +406,12 @@ function parseChain(
   return {
     grant,
     allocation,
+    failedAttempts: failedAttempts as FailedAttempt[],
     ...(request ? { request } : {}),
     ...(confirmation ? { confirmation } : {}),
     confirmationRecording: value.confirmation_recording === true,
+    ...(fulfilment ? { fulfilment } : {}),
+    handoverRecording: value.handover_recording === true,
     ...(settlement ? { settlement } : {}),
   };
 }
@@ -484,6 +541,8 @@ export const REDEEM_REFUSALS = [
   "loyalty_reward_expired",
   "loyalty_reward_unverified",
   "loyalty_redemption_already_requested",
+  // A restored reward's new request: no unit to hand over now (§2 (5)).
+  "loyalty_benefit_stock_exhausted",
   "membership_not_active",
 ] as const;
 export type RedeemRefusal = (typeof REDEEM_REFUSALS)[number];
@@ -494,6 +553,7 @@ export type RedeemAnswer =
       canonical: CanonicalRead;
       grant: ActionReceipt;
       allocation: Allocation;
+      failedAttempts: FailedAttempt[];
       request: ActionReceipt;
     }
   | { kind: "refused"; reason: RedeemRefusal }
@@ -523,6 +583,7 @@ export function parseRedeemAnswer(
           canonical,
           grant: chain.grant,
           allocation: chain.allocation,
+          failedAttempts: chain.failedAttempts,
           request: chain.request,
         }
       : { kind: "unknown" };
@@ -541,12 +602,23 @@ export function parseRedeemAnswer(
     : { kind: "unknown" };
 }
 
+const STATUS_KINDS = [
+  "requested",
+  "confirmation_recording",
+  "confirmed",
+  "fulfilled",
+  "fulfilment_failed",
+] as const;
+type StatusKind = (typeof STATUS_KINDS)[number];
+
 export type RedemptionStatusAnswer =
   | {
-      kind: "requested" | "confirmation_recording" | "confirmed";
+      kind: StatusKind;
       binding: RedemptionBinding;
       canonical: CanonicalRead;
       chain: Omit<RewardChain, "benefitId">;
+      /** fulfilment_failed: this operation's attempt among the failed ones. */
+      failedAttempt: number | null;
     }
   /** A committed answer that does not echo exactly this operation. */
   | { kind: "foreign" }
@@ -581,25 +653,32 @@ export function parseRedemptionStatus(
   if (
     httpStatus !== 200 ||
     body.ok !== true ||
-    !["requested", "confirmation_recording", "confirmed"].includes(
-      String(body.status),
-    )
+    !(STATUS_KINDS as readonly string[]).includes(String(body.status))
   ) {
     return { kind: "unknown" };
   }
   const binding = parseBinding(body.binding);
   const canonical = parseCanonicalRead(body.canonical);
   const chain = parseChain(body, true);
-  const kind = body.status as
-    "requested" | "confirmation_recording" | "confirmed";
+  const kind = body.status as StatusKind;
+  const failedAttempt =
+    kind === "fulfilment_failed" ? count(body.failed_attempt) : undefined;
   if (
     !binding ||
     !canonical ||
-    !chain?.request ||
-    // The status names exactly what its chain shows.
-    (kind === "confirmed") !== Boolean(chain.confirmation) ||
-    (kind === "confirmation_recording") !== chain.confirmationRecording ||
-    binding.benefitId !== chain.allocation.benefitId
+    !chain ||
+    binding.benefitId !== chain.allocation.benefitId ||
+    // The status names exactly what its chain shows: an earlier attempt a
+    // definitive failure ended, or the current one at its own step.
+    (kind === "fulfilment_failed"
+      ? failedAttempt === undefined ||
+        failedAttempt >= chain.failedAttempts.length
+      : body.failed_attempt !== undefined ||
+        !chain.request ||
+        (kind === "fulfilled") !== Boolean(chain.fulfilment) ||
+        (kind === "confirmed") !==
+          Boolean(chain.confirmation && !chain.fulfilment) ||
+        (kind === "confirmation_recording") !== chain.confirmationRecording)
   ) {
     return { kind: "unknown" };
   }
@@ -614,6 +693,7 @@ export function parseRedemptionStatus(
     binding,
     canonical,
     chain: { ...chain, validUntil: body.valid_until as string },
+    failedAttempt: failedAttempt ?? null,
   };
 }
 
@@ -624,6 +704,7 @@ export type ReferenceAnswer =
       canonical: CanonicalRead;
       grant: ActionReceipt;
       allocation: Allocation;
+      failedAttempts: FailedAttempt[];
       request: ActionReceipt;
     }
   | { kind: "not_current" }
@@ -661,6 +742,7 @@ export function parseReferenceAnswer(
         canonical,
         grant: chain.grant,
         allocation: chain.allocation,
+        failedAttempts: chain.failedAttempts,
         request: chain.request,
       }
     : { kind: "unknown" };
@@ -739,6 +821,9 @@ export const benefitStatuses = [
   "requested",
   "confirmation_recording",
   "confirmed",
+  "handover_recording",
+  "fulfilled",
+  "restored",
   "settled",
   "not_redeemable",
   "unconfirmed",
@@ -751,6 +836,9 @@ export type RewardStatus = Extract<
   | "requested"
   | "confirmation_recording"
   | "confirmed"
+  | "handover_recording"
+  | "fulfilled"
+  | "restored"
   | "settled"
   | "not_redeemable"
   | "unconfirmed"
@@ -761,6 +849,9 @@ const rewardStatuses: readonly string[] = [
   "requested",
   "confirmation_recording",
   "confirmed",
+  "handover_recording",
+  "fulfilled",
+  "restored",
   "settled",
   "not_redeemable",
   "unconfirmed",
@@ -802,6 +893,8 @@ export interface LoyaltyBenefitsView {
     validUntil: string;
     grantActionId: string | null;
     requestActionId: string | null;
+    /** Proven earlier handovers that failed (the reward restored after each). */
+    failedHandovers: number;
   } | null;
   actions: {
     submitActivity: boolean;
@@ -815,6 +908,9 @@ export const redemptionStatuses = [
   "requested",
   "confirmation_recording",
   "confirmed",
+  "handover_recording",
+  "fulfilled",
+  "fulfilment_failed",
   "settled",
   "unknown",
   "not_received",
@@ -886,7 +982,8 @@ export function isLoyaltyBenefitsView(
         (reward.grantActionId === null ||
           typeof reward.grantActionId === "string") &&
         (reward.requestActionId === null ||
-          typeof reward.requestActionId === "string"))) &&
+          typeof reward.requestActionId === "string") &&
+        count(reward.failedHandovers, MAX_FAILED_ATTEMPTS) !== undefined)) &&
     flag(value.actions.submitActivity) &&
     flag(value.actions.requestRedemption) &&
     flag(value.actions.showReference) &&

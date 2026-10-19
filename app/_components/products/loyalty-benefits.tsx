@@ -20,11 +20,12 @@ import {
 
 // loyalty-benefit-redeem-v1 on the native Loyalty page. Progress is the
 // programme's own count; eligibility, the grant, the request, the partner's
-// confirmation and the settlement are each shown only as the BFF proved them,
-// and availability, terms and validity are labelled as the programme's
-// records. The member only requests and shows their reference: the grant,
-// the partner's confirmation and the settlement are other people's acts,
-// named as the next step. Delivery is never claimed.
+// confirmation, its handover (or a handover that didn't happen) and the
+// settlement are each shown only as the BFF proved them, and availability,
+// terms and validity are labelled as the programme's records. The member
+// only requests and shows their reference: the grant, the partner's steps
+// and the settlement are other people's acts, named as the next step. A
+// handover is claimed only from the partner's proven record of it.
 
 const FAILURES = [
   "redemption_in_progress",
@@ -33,6 +34,7 @@ const FAILURES = [
   "loyalty_reward_expired",
   "loyalty_reward_unverified",
   "loyalty_redemption_already_requested",
+  "loyalty_benefit_stock_exhausted",
   "loyalty_redemption_not_current",
   "membership_not_active",
   "session_expired",
@@ -135,7 +137,10 @@ function RequestItem({
       setStatus("failed");
     }
   }
-  const final = status === "settled" || status === "not_received";
+  const final =
+    status === "settled" ||
+    status === "not_received" ||
+    status === "fulfilment_failed";
   return (
     <li className="card loyalty-submission">
       <strong>{label}</strong>
@@ -199,7 +204,9 @@ function RewardPanel({
         <strong>{benefit?.title ?? reward.benefitId}</strong>
       </p>
       <p role="status">{t(`status.${reward.status}`)}</p>
-      {reward.status === "granted" || reward.status === "requested" ? (
+      {reward.status === "granted" ||
+      reward.status === "requested" ||
+      reward.status === "restored" ? (
         <p className="field-hint">
           {t("validUntil", {
             date: format.dateTime(new Date(reward.validUntil), {
@@ -207,6 +214,16 @@ function RewardPanel({
             }),
           })}
         </p>
+      ) : null}
+      {reward.failedHandovers ? (
+        <p className="field-hint">
+          {t("failedHandovers", { count: reward.failedHandovers })}
+        </p>
+      ) : null}
+      {reward.status === "restored" &&
+      !view.held &&
+      !view.actions.requestRedemption ? (
+        <p className="field-hint">{t("restoredUnavailable")}</p>
       ) : null}
       {view.held ? <p className="field-hint">{t("heldNote")}</p> : null}
       {error ? (
@@ -235,7 +252,11 @@ function RewardPanel({
           partnerName={benefit?.partnerName ?? null}
         />
       ) : null}
-      {reward.status === "confirmed" || reward.status === "settled" ? (
+      {reward.status === "confirmed" ||
+      reward.status === "handover_recording" ? (
+        <p className="field-hint">{t("handoverNote")}</p>
+      ) : null}
+      {reward.status === "fulfilled" || reward.status === "settled" ? (
         <p className="field-hint">{t("fulfilment")}</p>
       ) : null}
       {reward.status === "settled" ? (

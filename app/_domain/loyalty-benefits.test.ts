@@ -41,6 +41,14 @@ describe("answers", () => {
         accounting: zero("loyalty_reward_expired"),
       }),
     ).toEqual({ kind: "refused", reason: "loyalty_reward_expired" });
+    // A restored reward's request with no unit to hand over: kept, nothing written.
+    expect(
+      parseRedeemAnswer(409, {
+        ok: false,
+        status: "loyalty_benefit_stock_exhausted",
+        accounting: zero("loyalty_benefit_stock_exhausted"),
+      }),
+    ).toEqual({ kind: "refused", reason: "loyalty_benefit_stock_exhausted" });
     for (const body of [
       // The runtime already holds this operation: never "not sent".
       {

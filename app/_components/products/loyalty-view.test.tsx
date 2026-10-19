@@ -294,10 +294,11 @@ const reward = (status: string, extra: Record<string, unknown> = {}) => ({
     validUntil: "2026-11-18T09:00:00.000Z",
     grantActionId: "act-0007",
     requestActionId: status === "requested" ? "act-0008" : null,
+    failedHandovers: status === "restored" ? 1 : 0,
   },
   actions: {
     submitActivity: false,
-    requestRedemption: status === "granted",
+    requestRedemption: status === "granted" || status === "restored",
     showReference: status === "requested",
   },
   next: status === "requested" ? "partner" : null,
@@ -343,7 +344,9 @@ it("shows the one-time reference only on the member's action, and only in the pa
   const user = userEvent.setup();
   view();
   expect(
-    await screen.findByText("Next: the partner confirms your redemption."),
+    await screen.findByText(
+      "Next: the partner confirms your reference and records the handover.",
+    ),
   ).toBeTruthy();
   expect(screen.queryByText("K7QX-2MPD")).toBeNull();
   expect(sent.some((body) => body.transition === "reference")).toBe(false);
@@ -360,4 +363,95 @@ it("shows the one-time reference only on the member's action, and only in the pa
   expect(window.location.href).not.toContain("K7QX");
   await user.click(screen.getByRole("button", { name: "Hide reference" }));
   expect(screen.queryByText("K7QX-2MPD")).toBeNull();
+});
+
+it("after a handover that didn't happen, the same reward is offered again until its original validity", async () => {
+  membership = {
+    ...activeMembership,
+    membership: { ...activeMembership.membership, state: "Fulfilment failed" },
+  };
+  benefitsOn = true;
+  benefitsView = reward("restored");
+  const user = userEvent.setup();
+  view();
+  expect(
+    await screen.findAllByText(
+      "The partner couldn't hand this over, so your reward is kept for you. Request it again when you're ready.",
+    ),
+  ).not.toHaveLength(0);
+  expect(
+    screen.getByText(
+      "Earlier handovers that didn't happen: 1. Your reward was kept each time.",
+    ),
+  ).toBeTruthy();
+  // The grant's own validity, never extended.
+  expect(
+    screen.getByText(/Valid until 2026-11-18T09:00:00\.000Z/),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Your reward is kept for you after a handover that didn't happen. Request it again before recording more activities.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Submit activity" })).toBeNull();
+  await user.click(
+    await screen.findByRole("button", { name: "Request redemption" }),
+  );
+  await waitFor(() =>
+    expect(
+      sent.filter((body) => body.transition === "redeem_submit"),
+    ).toHaveLength(1),
+  );
+});
+
+it("a restored reward with none available to hand over is kept, never offered, and says so", async () => {
+  membership = {
+    ...activeMembership,
+    membership: { ...activeMembership.membership, state: "Fulfilment failed" },
+  };
+  benefitsOn = true;
+  const restored = reward("restored");
+  benefitsView = {
+    ...restored,
+    benefits: restored.benefits.map((item) => ({
+      ...item,
+      availability: "unavailable",
+    })),
+    actions: { ...restored.actions, requestRedemption: false },
+  };
+  view();
+  expect(
+    await screen.findByText(
+      "None is available to hand over right now (programme record). Your reward stays yours until it expires.",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Request redemption" }),
+  ).toBeNull();
+});
+
+it("a proven handover is said as handed over, with settlement next; never before it", async () => {
+  membership = {
+    ...activeMembership,
+    membership: { ...activeMembership.membership, state: "Fulfilled" },
+  };
+  benefitsOn = true;
+  benefitsView = reward("fulfilled", { next: "settlement" });
+  view();
+  expect(
+    await screen.findAllByText(
+      "Handed over: the partner recorded that you received it.",
+    ),
+  ).not.toHaveLength(0);
+  expect(
+    screen.getByText("Next: the programme records the partner settlement."),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Your benefit was handed over. The programme records the settlement before you can record more activities.",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Request redemption" }),
+  ).toBeNull();
 });

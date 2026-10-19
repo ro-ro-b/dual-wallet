@@ -55,6 +55,10 @@ export const LOYALTY_STATES = [
   "Benefit eligible",
   "Redemption pending",
   "Redeemed",
+  // loyalty-benefit-redeem-v1 §2 (5): the partner's handover, or its
+  // definitive failure (the same reward restored for a new request).
+  "Fulfilled",
+  "Fulfilment failed",
   "Suspended",
   "Expired",
 ] as const;
@@ -407,6 +411,8 @@ export type ReceiptSemantic =
   | "unlock_benefit"
   | "request_redemption"
   | "confirm_redemption"
+  | "record_fulfilment"
+  | "fail_fulfilment"
   | "settle_partner";
 
 /** One Dual action, from the runtime's retained write (§3). */
@@ -785,6 +791,8 @@ const STATE_OF: Record<ReceiptSemantic, string> = {
   unlock_benefit: "Benefit eligible",
   request_redemption: "Redemption pending",
   confirm_redemption: "Redeemed",
+  record_fulfilment: "Fulfilled",
+  fail_fulfilment: "Fulfilment failed",
   settle_partner: "Member",
 };
 /** The reward semantics whose map names the benefit (benefit-redeem §5). */
@@ -792,12 +800,18 @@ const NAMES_BENEFIT: readonly ReceiptSemantic[] = [
   "unlock_benefit",
   "request_redemption",
   "confirm_redemption",
+  "record_fulfilment",
+  "fail_fulfilment",
 ];
 /** Those whose public event fields carry `benefitReference`. */
 const PUBLISHES_BENEFIT: readonly ReceiptSemantic[] = [
   "unlock_benefit",
   "confirm_redemption",
+  "record_fulfilment",
+  "fail_fulfilment",
 ];
+/** The only failure that restores a reward: nothing was handed over (§2 (5)). */
+export const FULFILMENT_FAILURE = "not_handed_over";
 
 /**
  * §5 (1)-(5): one action receipt on C, its retained full map (hash checked
@@ -854,7 +868,10 @@ export function checkReceipt(
     (NAMES_BENEFIT.includes(receipt.semantic) &&
       (!benefitId || written.benefitReference !== benefitId)) ||
     (PUBLISHES_BENEFIT.includes(receipt.semantic) &&
-      !publicFields.includes(`benefitReference:${benefitId}`))
+      !publicFields.includes(`benefitReference:${benefitId}`)) ||
+    // A failed handover is only ever the definitive one.
+    (receipt.semantic === "fail_fulfilment" &&
+      !publicFields.includes(`failureReason:${FULFILMENT_FAILURE}`))
   ) {
     return "receipt_mismatch";
   }

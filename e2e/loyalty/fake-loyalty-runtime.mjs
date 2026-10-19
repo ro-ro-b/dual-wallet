@@ -62,6 +62,8 @@ function reset() {
     pairs: [],
     reward: null,
     ledger: new Map(),
+    // Units a definitive failed handover returned to stock (exactly once).
+    returned: new Set(),
     requests: new Map(),
     counts: {},
     /** Every operation this runtime received, in order, by its id. */
@@ -200,13 +202,30 @@ const bindingOf = (reward) => ({
   grant_action_id: reward.grant.action_id,
   allocation_id: reward.allocation.allocation_id,
 });
+const failedAttemptsOf = (reward) =>
+  reward.failed?.length
+    ? {
+        failed_attempts: reward.failed.map(
+          ({ request, confirmation, failure }) => ({
+            request,
+            confirmation,
+            failure,
+          }),
+        ),
+      }
+    : {};
 const chainOf = (reward, requestKey) => ({
   grant: reward.grant,
   allocation: reward.allocation,
+  ...failedAttemptsOf(reward),
   ...(reward.request ? { [requestKey]: reward.request } : {}),
   ...(reward.confirmation ? { confirmation: reward.confirmation } : {}),
+  ...(reward.fulfilment ? { fulfilment: reward.fulfilment } : {}),
   ...(reward.settlement ? { settlement: reward.settlement } : {}),
 });
+/** Units in use: every allocation but those a definitive failure returned. */
+const unitsUsed = () =>
+  [...state.ledger.keys()].filter((id) => !state.returned.has(id)).length;
 const lifecycle = (semantic, eventId, lifecycleState) => ({
   lifecycle: {
     current_state: lifecycleState,
@@ -456,7 +475,7 @@ async function operate(body, claims) {
       ];
     }
     case "loyalty.benefits.read": {
-      const used = state.ledger.size;
+      const used = unitsUsed();
       const remaining = Math.max(0, STOCK - used);
       const pending = (await currentState()) === "Activity pending";
       return [
@@ -526,7 +545,16 @@ async function operate(body, claims) {
         { ok: false, status, accounting: zero(status) },
       ];
       const reward = state.reward;
-      if ((await currentState()) !== "Benefit eligible" || !reward) {
+      // A first request, or a new one of the same reward a definitive failed
+      // handover restored (its own unit reserved below).
+      const restored =
+        (await currentState()) === "Fulfilment failed" &&
+        Boolean(reward?.failed?.length) &&
+        !reward?.request;
+      if (
+        ((await currentState()) !== "Benefit eligible" && !restored) ||
+        !reward
+      ) {
         return refuse("loyalty_redemption_not_permitted");
       }
       if (canonicalJson(input) !== canonicalJson(bindingOf(reward))) {
@@ -536,6 +564,12 @@ async function operate(body, claims) {
         return refuse("loyalty_reward_expired");
       }
       const eventId = `evt-request-${body.operationId}`;
+      if (restored) {
+        if (unitsUsed() >= STOCK) {
+          return refuse("loyalty_benefit_stock_exhausted");
+        }
+        state.ledger.set(`retry-${eventId}`, { attempt: eventId });
+      }
       reward.request = {
         ...(await act(CANON, "update", {
           ...base("Redemption pending"),
@@ -553,6 +587,7 @@ async function operate(body, claims) {
       reward.requestEvent = eventId;
       // The runtime's own record of this operation (r20 echo).
       state.requests.set(body.operationId, {
+        requestEvent: eventId,
         binding: bindingOf(reward),
         requestHash: sha(
           canonicalJson({
@@ -571,6 +606,7 @@ async function operate(body, claims) {
           canonical: await canonicalRead(),
           grant: reward.grant,
           allocation: reward.allocation,
+          ...failedAttemptsOf(reward),
           action: reward.request,
           accounting: { dual_writes: 1, reason: "redemption_requested" },
         },
@@ -589,11 +625,24 @@ async function operate(body, claims) {
           },
         ];
       }
+      // This operation's own attempt: an earlier one a definitive failure
+      // ended, or the current one.
+      const failedAt = (state.reward.failed ?? []).findIndex(
+        (item) => item.requestEvent === held.requestEvent,
+      );
       return [
         200,
         {
           ok: true,
-          status: state.reward.confirmation ? "confirmed" : "requested",
+          status:
+            failedAt >= 0
+              ? "fulfilment_failed"
+              : state.reward.fulfilment
+                ? "fulfilled"
+                : state.reward.confirmation
+                  ? "confirmed"
+                  : "requested",
+          ...(failedAt >= 0 ? { failed_attempt: failedAt } : {}),
           operation_id: body.operationId,
           request_hash: held.requestHash,
           binding: held.binding,
@@ -628,6 +677,7 @@ async function operate(body, claims) {
           canonical: await canonicalRead(),
           grant: reward.grant,
           allocation: reward.allocation,
+          ...failedAttemptsOf(reward),
           action: reward.request,
           accounting: zero("reference_shown"),
         },
@@ -746,13 +796,14 @@ createServer(async (request, response) => {
         if (state.pairs.length < 2) {
           return json(response, 409, { ok: false, status: "not_eligible" });
         }
-        if (state.ledger.size >= STOCK) {
+        if (unitsUsed() >= STOCK) {
           return json(response, 409, { ok: false, status: "exhausted" });
         }
         const eventId = `evt-unlock-${state.pairs.length}`;
         state.reward = {
           benefitId: BENEFIT,
           validUntil: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+          failed: [],
         };
         const grant = {
           ...(await act(CANON, "update", {
@@ -814,9 +865,81 @@ createServer(async (request, response) => {
         };
         return json(response, 200, { ok: true });
       }
-      case "/__test__/settle": {
+      // The same partner records the handover, in its own session.
+      case "/__test__/partner/fulfil": {
         const reward = state.reward;
         if ((await currentState()) !== "Redeemed" || !reward) {
+          return json(response, 409, { ok: false, status: "not_permitted" });
+        }
+        reward.fulfilment = {
+          ...(await act(CANON, "update", {
+            ...base("Fulfilled"),
+            ...lifecycle(
+              "record_fulfilment",
+              `evt-fulfil-${reward.requestEvent}`,
+              "Fulfilled",
+            ),
+            proof_event: {
+              event_type: "record_fulfilment",
+              public_fields: [
+                "action:record_fulfilment",
+                "state:Fulfilled",
+                `benefitReference:${reward.benefitId}`,
+              ],
+            },
+          })),
+          semantic: "record_fulfilment",
+        };
+        return json(response, 200, { ok: true });
+      }
+      // Its definitive failed handover: the same reward restored for a new
+      // request; an available unit is stock again, a damaged one never.
+      case "/__test__/partner/fail": {
+        const reward = state.reward;
+        if ((await currentState()) !== "Redeemed" || !reward) {
+          return json(response, 409, { ok: false, status: "not_permitted" });
+        }
+        const failure = {
+          ...(await act(CANON, "update", {
+            ...base("Fulfilment failed"),
+            ...lifecycle(
+              "fail_fulfilment",
+              `evt-fail-${reward.requestEvent}`,
+              "Fulfilment failed",
+            ),
+            proof_event: {
+              event_type: "fail_fulfilment",
+              public_fields: [
+                "action:fail_fulfilment",
+                "state:Fulfilment failed",
+                `benefitReference:${reward.benefitId}`,
+                "failureReason:not_handed_over",
+              ],
+            },
+          })),
+          semantic: "fail_fulfilment",
+        };
+        reward.failed.push({
+          request: reward.request,
+          confirmation: reward.confirmation,
+          failure,
+          requestEvent: reward.requestEvent,
+        });
+        const unit = state.ledger.has(`retry-${reward.requestEvent}`)
+          ? `retry-${reward.requestEvent}`
+          : reward.allocation.allocation_id;
+        if ((body.unitDisposition ?? "available") === "available") {
+          state.returned.add(unit);
+        }
+        delete reward.request;
+        delete reward.requestEvent;
+        delete reward.confirmation;
+        return json(response, 200, { ok: true });
+      }
+      case "/__test__/settle": {
+        const reward = state.reward;
+        // Settlement only after the partner's handover.
+        if ((await currentState()) !== "Fulfilled" || !reward) {
           return json(response, 409, { ok: false });
         }
         reward.settlement = {

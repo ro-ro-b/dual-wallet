@@ -327,6 +327,8 @@ const WAIT: Record<string, string> = {
   "Benefit eligible": "benefit_eligible",
   "Redemption pending": "redemption_pending",
   Redeemed: "redeemed",
+  Fulfilled: "fulfilled",
+  "Fulfilment failed": "fulfilment_failed",
 };
 
 function MembershipSection({

@@ -415,7 +415,7 @@ async function twoVerifiedActivities(page: Page) {
   }
 }
 
-test("at phone width, from the keyboard: a granted reward, one request lost whole, the one-time reference, the partner's recorded confirmation, settlement and a fresh reopen", async ({
+test("at phone width, from the keyboard: a granted reward, one request lost whole, the one-time reference, the partner's recorded confirmation and handover, settlement and a fresh reopen", async ({
   page,
   context,
 }) => {
@@ -482,7 +482,9 @@ test("at phone width, from the keyboard: a granted reward, one request lost whol
     reward.getByText("Requested. Show your one-time reference to the partner."),
   ).toBeVisible();
   await expect(
-    page.getByText("Next: the partner confirms your redemption."),
+    page.getByText(
+      "Next: the partner confirms your reference and records the handover.",
+    ),
   ).toBeVisible();
   await expect(
     reward.getByRole("button", { name: "Request redemption" }),
@@ -525,12 +527,42 @@ test("at phone width, from the keyboard: a granted reward, one request lost whol
   expect((await confirm(code)).status).toBe(409);
   await page.reload();
   await expect(
-    reward.getByText("The partner recorded your redemption."),
+    reward.getByText(
+      "The partner confirmed your reference. They record the handover next.",
+    ),
   ).toBeVisible();
-  await expect(reward.getByText(/doesn't track delivery/)).toBeVisible();
+  await expect(
+    reward.getByText(
+      "If the partner can't hand it over, your reward is kept for you until it expires.",
+    ),
+  ).toBeVisible();
   await expect(
     reward.getByRole("button", { name: "Show my one-time reference" }),
   ).toHaveCount(0);
+  // A confirmation is not the handover, and is never settled.
+  await expect(
+    page.getByText(
+      "Next: the partner confirms your reference and records the handover.",
+    ),
+  ).toBeVisible();
+  expect(
+    (
+      await fetch(`${runtimeOrigin}/__test__/settle`, {
+        method: "POST",
+        body: "{}",
+      })
+    ).ok,
+  ).toBe(false);
+
+  // The partner records the handover, in its own session.
+  await post(runtimeOrigin, "/__test__/partner/fulfil");
+  await page.reload();
+  await expect(
+    reward.getByText("Handed over: the partner recorded that you received it."),
+  ).toBeVisible();
+  await expect(
+    reward.getByText(/The handover is the partner's record/),
+  ).toBeVisible();
   await expect(
     page.getByText("Next: the programme records the partner settlement."),
   ).toBeVisible();
@@ -541,14 +573,14 @@ test("at phone width, from the keyboard: a granted reward, one request lost whol
   const card = page.getByRole("region", { name: "Your membership" });
   await expect(
     card.getByText(
-      "A studio hour (fictional): Redeemed, and the programme recorded the partner settlement.",
+      "A studio hour (fictional): Handed over, and the programme recorded the partner settlement.",
     ),
   ).toBeVisible();
   await expect(card.getByText(code)).toHaveCount(0);
   await page.goto(PAGE);
   await expect(
     reward.getByText(
-      "Redeemed, and the programme recorded the partner settlement.",
+      "Handed over, and the programme recorded the partner settlement.",
     ),
   ).toBeVisible();
   await expect(reward.getByText(/isn't a payment to you/)).toBeVisible();
@@ -560,6 +592,147 @@ test("at phone width, from the keyboard: a granted reward, one request lost whol
   expect(
     idsOf(after, "loyalty.redemption.status").every((id) => id === original),
   ).toBe(true);
+  await noHorizontalOverflow(page);
+  expect(problems).toEqual([]);
+});
+
+/** Granted, requested from the keyboard, shown and confirmed by the partner. */
+async function confirmedReward(page: Page) {
+  await activeMember(page);
+  await twoVerifiedActivities(page);
+  await post(runtimeOrigin, "/__test__/grant");
+  await page.reload();
+  const reward = page.getByRole("region", { name: "Your reward" });
+  await page.locator("body").focus();
+  await tabTo(page, reward.getByRole("button", { name: "Request redemption" }));
+  await page.keyboard.press("Enter");
+  await expect(
+    reward.getByText("Requested. Show your one-time reference to the partner."),
+  ).toBeVisible();
+  const code = await shownReference(page);
+  await post(runtimeOrigin, "/__test__/partner/confirm", { reference: code });
+  return { reward, code };
+}
+
+async function shownReference(page: Page) {
+  const reward = page.getByRole("region", { name: "Your reward" });
+  await page.locator("body").focus();
+  await tabTo(
+    page,
+    reward.getByRole("button", { name: "Show my one-time reference" }),
+  );
+  await page.keyboard.press("Enter");
+  const shown = page.getByRole("region", { name: "Your one-time reference" });
+  await expect(shown).toBeVisible();
+  return (await shown.locator(".loyalty-reference-code").innerText()).trim();
+}
+
+test("at phone width, from the keyboard: a handover that didn't happen restores the same reward; a new request, a new reference, the handover and settlement", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const problems = watch(page);
+  const { reward, code } = await confirmedReward(page);
+
+  // The partner records a definitive failed handover; the unit is available.
+  await post(runtimeOrigin, "/__test__/partner/fail", {
+    unitDisposition: "available",
+  });
+  await page.reload();
+  await expect(
+    reward.getByText(
+      "The partner couldn't hand this over, so your reward is kept for you. Request it again when you're ready.",
+    ),
+  ).toBeVisible();
+  await expect(
+    reward.getByText(
+      "Earlier handovers that didn't happen: 1. Your reward was kept each time.",
+    ),
+  ).toBeVisible();
+  // Its original validity (the programme's record), never extended.
+  await expect(
+    reward.getByText(/^Valid until .+\(programme record\)\.$/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Your reward is kept for you after a handover that didn't happen. Request it again before recording more activities.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Submit activity" }),
+  ).toHaveCount(0);
+  // The original request reads its own outcome; it is never sent again.
+  const requests = page.getByRole("region", {
+    name: "Redemption requests from this wallet",
+  });
+  await requests.getByRole("button", { name: "Check status" }).click();
+  await expect(
+    requests.getByText(
+      "The partner couldn't hand this over. Your reward was kept for a new request.",
+    ),
+  ).toBeVisible();
+  await noHorizontalOverflow(page);
+
+  // A new request of the same reward, from the keyboard.
+  await page.locator("body").focus();
+  await tabTo(page, reward.getByRole("button", { name: "Request redemption" }));
+  await page.keyboard.press("Enter");
+  await expect(
+    reward.getByText("Requested. Show your one-time reference to the partner."),
+  ).toBeVisible();
+  const again = await shownReference(page);
+  expect(again).not.toBe(code);
+  // The earlier reference never confirms the new attempt.
+  expect(
+    (
+      await fetch(`${runtimeOrigin}/__test__/partner/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ reference: code }),
+      })
+    ).ok,
+  ).toBe(false);
+  await post(runtimeOrigin, "/__test__/partner/confirm", { reference: again });
+  await post(runtimeOrigin, "/__test__/partner/fulfil");
+  await post(runtimeOrigin, "/__test__/settle");
+  await page.reload();
+  await expect(
+    reward.getByText(
+      "Handed over, and the programme recorded the partner settlement.",
+    ),
+  ).toBeVisible();
+  await expect(
+    reward.getByText(
+      "Earlier handovers that didn't happen: 1. Your reward was kept each time.",
+    ),
+  ).toBeVisible();
+  // Two requests, each under its own original id, each sent once.
+  const sent = idsOf(await received(), "loyalty.redemption.request");
+  expect(sent).toHaveLength(2);
+  expect(new Set(sent).size).toBe(2);
+  await noHorizontalOverflow(page);
+  expect(problems).toEqual([]);
+});
+
+test("a damaged unit never returns to stock: the restored reward is kept and says so, and no request is offered", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const problems = watch(page);
+  const { reward } = await confirmedReward(page);
+  await post(runtimeOrigin, "/__test__/partner/fail", {
+    unitDisposition: "damaged",
+  });
+  const before = (await counts())["loyalty.redemption.request"];
+  await page.reload();
+  await expect(
+    reward.getByText(
+      "None is available to hand over right now (programme record). Your reward stays yours until it expires.",
+    ),
+  ).toBeVisible();
+  await expect(
+    reward.getByRole("button", { name: "Request redemption" }),
+  ).toHaveCount(0);
+  expect((await counts())["loyalty.redemption.request"]).toBe(before);
   await noHorizontalOverflow(page);
   expect(problems).toEqual([]);
 });

@@ -84,9 +84,18 @@ The wallet fails closed on each of these until Studio provides it.
    `src/loyalty-benefit-allocation.mjs:93`). The suffix format must be
    confirmed on a live write; if it differs, the grant shows as unconfirmed
    (never as granted).
-7. **No fulfilment state exists.** `Redeemed` means the partner recorded the
-   redemption. Delivery, and a partner-reported failure after use, have no
-   state. The wallet never claims delivery (§6).
+7. **Fulfilment (root policy decision, Studio `faa0d774` and later).**
+   `Redeemed` is the partner's confirmation, not the handover. Two
+   canonical updates by the benefit's own partner follow it:
+   `record_fulfilment` (→ `Fulfilled`) and `fail_fulfilment`
+   (→ `Fulfilment failed`, only `failureReason: not_handed_over`, with the
+   unit's disposition). Settlement runs only from `Fulfilled`. A definitive
+   failure restores the SAME member's reward: a new `request_redemption`
+   from `Fulfilment failed`, under the same grant and binding, until the
+   grant's ORIGINAL validity only. Stock is separate: each attempt has its
+   own unit, an available one returns to stock exactly once, a damaged or
+   missing one never; an unknown handover outcome is held, with nothing
+   restored or returned (§6).
 
 ## 3. Binding
 
@@ -153,15 +162,21 @@ New `ActionReceipt.semantic` values, all `action_name: "update"`:
      "grant": ActionReceipt,                       // unlock_benefit
      "allocation": Allocation,
      "valid_until": ISO,                           // APPLICATION: grant time + valid_days
-     "request"?: ActionReceipt,                    // request_redemption
+     "failed_attempts"?: [ { "request": ActionReceipt,        // request_redemption
+                             "confirmation": ActionReceipt,   // confirm_redemption
+                             "failure": ActionReceipt } ],    // fail_fulfilment; oldest first, 1..50
+     "request"?: ActionReceipt,                    // request_redemption (the current attempt)
      "confirmation"?: ActionReceipt,               // confirm_redemption
      "confirmation_recording"?: true,              // APPLICATION: partner confirmation not yet on Dual
-     "settlement"?: ActionReceipt },               // settle_partner
+     "fulfilment"?: ActionReceipt,                 // record_fulfilment
+     "handover_recording"?: true,                  // APPLICATION: the handover outcome is not yet on Dual
+     "settlement"?: ActionReceipt },               // settle_partner, only after fulfilment
   "accounting": { "dual_writes": 0, "reason": "benefits_read" } }
 ```
 
 `reward` is the record's latest grant and what followed it, and nothing
-earlier. `programme.programme_id` must be exactly the binding's
+earlier: its earlier handover attempts a definitive failure ended
+(`failed_attempts`), then the current attempt. `programme.programme_id` must be exactly the binding's
 `programmeId`, as `loyalty.programme.read` requires. A read naming another
 programme is unavailable: none of its terms, progress or revision is shown or
 bound into a request.
@@ -174,12 +189,12 @@ runtime runs the existing `request_redemption` as the record's member. It is
 idempotent by `operationId`, as `loyalty.activity.submit` is
 (loyalty-join-earn-v1 §4.4).
 
-| HTTP | `status`                                                                                                                                                                             | Body                                                                                                                      |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| 200  | `redemption_requested`                                                                                                                                                               | `canonical`, `grant`, `allocation`, `action` (request_redemption), `accounting {1, "redemption_requested"}`; no reference |
-| 409  | `loyalty_redemption_not_permitted`, `loyalty_reward_changed`, `loyalty_reward_expired`, `loyalty_reward_unverified`, `loyalty_redemption_already_requested`, `membership_not_active` | `accounting {0, <status>}`                                                                                                |
-| 409  | `operation_already_received`                                                                                                                                                         | `accounting {0, …}`: not a refusal; the wallet keeps it unknown                                                           |
-| 202  | `outcome_unknown`                                                                                                                                                                    | `accounting {"unknown", "outcome_unknown"}`                                                                               |
+| HTTP | `status`                                                                                                                                                                                                                                                                  | Body                                                                                                                                                                |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | `redemption_requested`                                                                                                                                                                                                                                                    | `canonical`, `grant`, `allocation`, `failed_attempts`? (a restored reward's), `action` (request_redemption), `accounting {1, "redemption_requested"}`; no reference |
+| 409  | `loyalty_redemption_not_permitted`, `loyalty_reward_changed`, `loyalty_reward_expired`, `loyalty_reward_unverified`, `loyalty_redemption_already_requested`, `loyalty_benefit_stock_exhausted` (a restored reward with no unit to hand over now), `membership_not_active` | `accounting {0, <status>}`                                                                                                                                          |
+| 409  | `operation_already_received`                                                                                                                                                                                                                                              | `accounting {0, …}`: not a refusal; the wallet keeps it unknown                                                                                                     |
+| 202  | `outcome_unknown`                                                                                                                                                                                                                                                         | `accounting {"unknown", "outcome_unknown"}`                                                                                                                         |
 
 ### 4.3 `loyalty.redemption.status` (read, the original operation only)
 
@@ -196,7 +211,9 @@ naming another operation (or none) is unknown and closes nothing.
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `requested`              | `operation_id`, `request_hash`, `binding` (the four ids of §4.2), `canonical`, `grant`, `allocation`, `action` (request), `valid_until` |
 | `confirmation_recording` | as `requested`: the partner's confirmation is recorded by the programme but not yet written to Dual (APPLICATION)                       |
-| `confirmed`              | as `requested`, plus `confirmation`, and `settlement` once recorded                                                                     |
+| `confirmed`              | as `requested`, plus `confirmation`; `handover_recording` while the partner's handover outcome is not yet on Dual                       |
+| `fulfilled`              | as `confirmed`, plus `fulfilment`, and `settlement` once recorded                                                                       |
+| `fulfilment_failed`      | as `requested`, with `failed_attempt` (this operation's index in `failed_attempts`); the reward's current attempt, if any, follows it   |
 | `not_received`           | `operation_id`, `accounting {0, "operation_not_received"}`: the runtime never accepted it and, its assertion having expired, never can  |
 | `outcome_unknown` (202)  | `accounting {"unknown", "outcome_unknown"}`                                                                                             |
 
@@ -208,10 +225,10 @@ fresh read id, not the request's, so the member can show the reference from
 any device or session, even after the request's journal has expired. It is
 asked only when the member chooses to show it.
 
-| HTTP | `status`                         | Body                                                                                                                                                      |
-| ---- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 200  | `reference_shown`                | `reference` (`/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/`), `canonical`, `grant`, `allocation`, `action` (this request), `accounting {0, "reference_shown"}` |
-| 409  | `loyalty_redemption_not_current` | `accounting {0, …}`: the request was confirmed, expired, held or replaced; no reference                                                                   |
+| HTTP | `status`                         | Body                                                                                                                                                                          |
+| ---- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 200  | `reference_shown`                | `reference` (`/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/`), `canonical`, `grant`, `allocation`, `failed_attempts`?, `action` (this request), `accounting {0, "reference_shown"}` |
+| 409  | `loyalty_redemption_not_current` | `accounting {0, …}`: the request was confirmed, expired, held or replaced; no reference                                                                                       |
 
 The reference is the existing HMAC one: the same request always shows the
 same reference, and a new one is never minted. It is never written to the
@@ -226,19 +243,25 @@ shows it only when the request's receipt is the canonical's **current** state
 provider history, and current versus historical. Its written map must also
 have:
 
-| Semantic             | `state`              | Root `benefitReference` | `proof_event.public_fields` has | `lifecycle.action_id` starts |
-| -------------------- | -------------------- | ----------------------- | ------------------------------- | ---------------------------- |
-| `unlock_benefit`     | `Benefit eligible`   | the benefit             | `benefitReference:<benefit>`    | `…_unlock_benefit_`          |
-| `request_redemption` | `Redemption pending` | the benefit             | (nothing more)                  | `…_request_redemption_`      |
-| `confirm_redemption` | `Redeemed`           | the benefit             | `benefitReference:<benefit>`    | `…_confirm_redemption_`      |
-| `settle_partner`     | `Member`             | (not checked)           | (nothing more)                  | `…_settle_partner_`          |
+| Semantic             | `state`              | Root `benefitReference` | `proof_event.public_fields` has                                  | `lifecycle.action_id` starts |
+| -------------------- | -------------------- | ----------------------- | ---------------------------------------------------------------- | ---------------------------- |
+| `unlock_benefit`     | `Benefit eligible`   | the benefit             | `benefitReference:<benefit>`                                     | `…_unlock_benefit_`          |
+| `request_redemption` | `Redemption pending` | the benefit             | (nothing more)                                                   | `…_request_redemption_`      |
+| `confirm_redemption` | `Redeemed`           | the benefit             | `benefitReference:<benefit>`                                     | `…_confirm_redemption_`      |
+| `record_fulfilment`  | `Fulfilled`          | the benefit             | `benefitReference:<benefit>`                                     | `…_record_fulfilment_`       |
+| `fail_fulfilment`    | `Fulfilment failed`  | the benefit             | `benefitReference:<benefit>` and `failureReason:not_handed_over` | `…_fail_fulfilment_`         |
+| `settle_partner`     | `Member`             | (not checked)           | (nothing more)                                                   | `…_settle_partner_`          |
 
 **The reward chain.** Each step must be the very next change to the
 canonical object after the one before:
 
-- request `next_nonce` = grant + 1;
+- each failed attempt: its request = the grant (or the previous attempt's
+  failure) + 1, its confirmation = request + 1, its failure =
+  confirmation + 1;
+- the current request = the grant (or the last failure) + 1;
 - confirmation = request + 1;
-- settlement = confirmation + 1.
+- fulfilment = confirmation + 1;
+- settlement = fulfilment + 1 (never straight after a confirmation).
 
 No other action can stand in for a step of this reward.
 
@@ -285,44 +308,55 @@ be confirmed".
 
 **Per benefit, the wallet shows exactly one of:**
 
-| Status                   | When                                                                        |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `locked`                 | not eligible by the programme's count                                       |
-| `eligible_unconfirmed`   | the programme says eligible; the wallet cannot prove the pairs              |
-| `eligible`               | proven eligible; availability shown separately; next: the programme team    |
-| `already_redeemed`       | the programme records a verified redemption of it on this record before     |
-| `granted` / `expired`    | proven grant, current state `Benefit eligible`; expired after `valid_until` |
-| `requested`              | proven request adjacent to the grant; next: the partner                     |
-| `confirmation_recording` | the programme recorded the partner's confirmation, not yet on Dual          |
-| `confirmed`              | proven confirmation adjacent to the request; delivery not tracked           |
-| `settled`                | proven settlement adjacent to the confirmation (a record, not a payment)    |
-| `not_redeemable`         | proven, but a later change made it no longer the record's current state     |
-| `unconfirmed`            | any proof in the reward's chain fails                                       |
+| Status                   | When                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locked`                 | not eligible by the programme's count                                                                                                                      |
+| `eligible_unconfirmed`   | the programme says eligible; the wallet cannot prove the pairs                                                                                             |
+| `eligible`               | proven eligible; availability shown separately; next: the programme team                                                                                   |
+| `already_redeemed`       | the programme records a verified redemption of it on this record before                                                                                    |
+| `granted` / `expired`    | proven grant, current state `Benefit eligible`; expired after `valid_until`                                                                                |
+| `requested`              | proven request adjacent to the grant; next: the partner                                                                                                    |
+| `confirmation_recording` | the programme recorded the partner's confirmation, not yet on Dual                                                                                         |
+| `confirmed`              | proven confirmation adjacent to the request; the handover is next                                                                                          |
+| `handover_recording`     | the programme recorded the partner's handover outcome, not yet on Dual: held                                                                               |
+| `fulfilled`              | proven handover adjacent to the confirmation; settlement next                                                                                              |
+| `restored`               | a proven definitive failed handover is current: the same reward, offered again until its original `valid_until` when a unit is not known to be unavailable |
+| `settled`                | proven settlement adjacent to the handover (a record, not a payment)                                                                                       |
+| `not_redeemable`         | proven, but a later change made it no longer the record's current state                                                                                    |
+| `unconfirmed`            | any proof in the reward's chain fails                                                                                                                      |
 
 `held` (canonical `Suspended`) and `ended` (`Expired`) hide every member
 action and keep the reward's last proven step, labelled as the past.
 
 ## 6. Member actions and the next actor, by canonical state
 
-| State                  | Member may                     | Shown next actor                                         |
-| ---------------------- | ------------------------------ | -------------------------------------------------------- |
-| `Member`               | submit an activity             | –                                                        |
-| `Activity pending`     | nothing                        | the programme verifies the last activity                 |
-| `Activity verified`    | submit an activity             | the programme team grants an eligible, available benefit |
-| `Benefit eligible`     | request redemption (unexpired) | – (an expired reward: the programme team)                |
-| `Redemption pending`   | show the reference             | the partner confirms                                     |
-| `Redeemed`             | nothing                        | the programme records the partner settlement             |
-| `Suspended`, `Expired` | nothing                        | the programme team                                       |
+| State                  | Member may                                                        | Shown next actor                                         |
+| ---------------------- | ----------------------------------------------------------------- | -------------------------------------------------------- |
+| `Member`               | submit an activity                                                | –                                                        |
+| `Activity pending`     | nothing                                                           | the programme verifies the last activity                 |
+| `Activity verified`    | submit an activity                                                | the programme team grants an eligible, available benefit |
+| `Benefit eligible`     | request redemption (unexpired)                                    | – (an expired reward: the programme team)                |
+| `Redemption pending`   | show the reference                                                | the partner confirms and records the handover            |
+| `Redeemed`             | nothing                                                           | the partner records the handover                         |
+| `Fulfilled`            | nothing                                                           | the programme records the partner settlement             |
+| `Fulfilment failed`    | request again (restored, unexpired, a unit not known unavailable) | –                                                        |
+| `Suspended`, `Expired` | nothing                                                           | the programme team                                       |
 
 The wallet refuses to prepare an activity outside `Member` and
 `Activity verified` (`loyalty_activity_not_permitted`, nothing journalled).
 That is §2 (3) on the wallet's side.
 
-**Fulfilment.** `confirmed` reads "The partner recorded your redemption".
-The wallet has no delivery state, never shows one, and never offers a second
-request for a confirmed reward. If the member did not receive the benefit,
-the page says to contact the programme team with the redemption's date. The
-reward stays exactly as recorded: no completed screen, no new request.
+**Fulfilment.** `confirmed` reads "The partner confirmed your reference.
+They record the handover next." A handover is claimed only from the
+partner's proven `record_fulfilment`; an unknown outcome
+(`handover_recording`) is held with no action. After a proven definitive
+failure the reward is `restored`: the same grant, its original validity, the
+number of earlier failed handovers, and a new request (its own operation,
+unit and one-time reference) when a unit is not known to be unavailable;
+otherwise the page says none is available and the reward stays the member's
+until it expires. The original request's status reads `fulfilment_failed`,
+never re-sent. If the member did not receive a handed-over benefit, the page
+says to contact the programme team with the redemption's date.
 
 ## 7. Recovery
 
@@ -381,7 +415,10 @@ is left to confirm). `not_received` follows the same bound as an activity.
 5. The partner leg: a scoped benefit_partner session presenting the member's
    reference. This is Studio's existing role session, untouched by the
    wallet.
-6. Fulfilment, delivery and partner-reported failure: out of scope (§2 (7)).
+6. Fulfilment on a live record: `record_fulfilment` and `fail_fulfilment`
+   are proven only on fictional fixtures and Studio's integrated driver
+   (§2 (7)); their live written maps, public fields and unit marks need a
+   live write.
 7. **Governing revision.** The revision a reward's terms and progress come
    from is not provable by the wallet (§5, programme and revision). Making
    it provable would need Studio to publish the governing revision where
