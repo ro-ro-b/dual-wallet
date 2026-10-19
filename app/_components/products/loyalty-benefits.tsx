@@ -223,7 +223,13 @@ function RewardPanel({
       {reward.status === "restored" &&
       !view.held &&
       !view.actions.requestRedemption ? (
-        <p className="field-hint">{t("restoredUnavailable")}</p>
+        <p className="field-hint">
+          {t(
+            benefit?.availability === "unconfirmed"
+              ? "restoredUnconfirmed"
+              : "restoredUnavailable",
+          )}
+        </p>
       ) : null}
       {view.held ? <p className="field-hint">{t("heldNote")}</p> : null}
       {error ? (

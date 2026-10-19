@@ -430,6 +430,37 @@ it("a restored reward with none available to hand over is kept, never offered, a
   ).toBeNull();
 });
 
+it("a restored reward whose stock can't be confirmed is kept and says so, with no request offered", async () => {
+  membership = {
+    ...activeMembership,
+    membership: { ...activeMembership.membership, state: "Fulfilment failed" },
+  };
+  benefitsOn = true;
+  const restored = reward("restored");
+  benefitsView = {
+    ...restored,
+    benefits: restored.benefits.map((item) => ({
+      ...item,
+      availability: "unconfirmed",
+    })),
+    actions: { ...restored.actions, requestRedemption: false },
+  };
+  view();
+  expect(
+    await screen.findByText(
+      "Whether one is available to hand over can't be confirmed right now. Your reward stays yours until it expires; check again later.",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText(
+      "None is available to hand over right now (programme record). Your reward stays yours until it expires.",
+    ),
+  ).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Request redemption" }),
+  ).toBeNull();
+});
+
 it("a proven handover is said as handed over, with settlement next; never before it", async () => {
   membership = {
     ...activeMembership,

@@ -941,6 +941,7 @@
       "fulfilment": "The handover is the partner's record. If you didn't receive the benefit, contact the programme team with the date of your redemption.",
       "handoverNote": "If the partner can't hand it over, your reward is kept for you until it expires.",
       "restoredUnavailable": "None is available to hand over right now (programme record). Your reward stays yours until it expires.",
+      "restoredUnconfirmed": "Whether one is available to hand over can't be confirmed right now. Your reward stays yours until it expires; check again later.",
       "failedHandovers": "Earlier handovers that didn't happen: {count}. Your reward was kept each time.",
       "settlementNote": "Settlement is the programme's record with the partner. It isn't a payment to you.",
       "heldNote": "Your membership is on hold. The programme team decides what happens to this reward.",

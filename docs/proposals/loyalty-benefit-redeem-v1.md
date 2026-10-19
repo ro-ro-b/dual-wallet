@@ -308,39 +308,39 @@ be confirmed".
 
 **Per benefit, the wallet shows exactly one of:**
 
-| Status                   | When                                                                                                                                                       |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `locked`                 | not eligible by the programme's count                                                                                                                      |
-| `eligible_unconfirmed`   | the programme says eligible; the wallet cannot prove the pairs                                                                                             |
-| `eligible`               | proven eligible; availability shown separately; next: the programme team                                                                                   |
-| `already_redeemed`       | the programme records a verified redemption of it on this record before                                                                                    |
-| `granted` / `expired`    | proven grant, current state `Benefit eligible`; expired after `valid_until`                                                                                |
-| `requested`              | proven request adjacent to the grant; next: the partner                                                                                                    |
-| `confirmation_recording` | the programme recorded the partner's confirmation, not yet on Dual                                                                                         |
-| `confirmed`              | proven confirmation adjacent to the request; the handover is next                                                                                          |
-| `handover_recording`     | the programme recorded the partner's handover outcome, not yet on Dual: held                                                                               |
-| `fulfilled`              | proven handover adjacent to the confirmation; settlement next                                                                                              |
-| `restored`               | a proven definitive failed handover is current: the same reward, offered again until its original `valid_until` when a unit is not known to be unavailable |
-| `settled`                | proven settlement adjacent to the handover (a record, not a payment)                                                                                       |
-| `not_redeemable`         | proven, but a later change made it no longer the record's current state                                                                                    |
-| `unconfirmed`            | any proof in the reward's chain fails                                                                                                                      |
+| Status                   | When                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locked`                 | not eligible by the programme's count                                                                                                                                     |
+| `eligible_unconfirmed`   | the programme says eligible; the wallet cannot prove the pairs                                                                                                            |
+| `eligible`               | proven eligible; availability shown separately; next: the programme team                                                                                                  |
+| `already_redeemed`       | the programme records a verified redemption of it on this record before                                                                                                   |
+| `granted` / `expired`    | proven grant, current state `Benefit eligible`; expired after `valid_until`                                                                                               |
+| `requested`              | proven request adjacent to the grant; next: the partner                                                                                                                   |
+| `confirmation_recording` | the programme recorded the partner's confirmation, not yet on Dual                                                                                                        |
+| `confirmed`              | proven confirmation adjacent to the request; the handover is next                                                                                                         |
+| `handover_recording`     | the programme recorded the partner's handover outcome, not yet on Dual: held                                                                                              |
+| `fulfilled`              | proven handover adjacent to the confirmation; settlement next                                                                                                             |
+| `restored`               | a proven definitive failed handover is current: the same reward, offered again until its original `valid_until` only when the programme's record says a unit is available |
+| `settled`                | proven settlement adjacent to the handover (a record, not a payment)                                                                                                      |
+| `not_redeemable`         | proven, but a later change made it no longer the record's current state                                                                                                   |
+| `unconfirmed`            | any proof in the reward's chain fails                                                                                                                                     |
 
 `held` (canonical `Suspended`) and `ended` (`Expired`) hide every member
 action and keep the reward's last proven step, labelled as the past.
 
 ## 6. Member actions and the next actor, by canonical state
 
-| State                  | Member may                                                        | Shown next actor                                         |
-| ---------------------- | ----------------------------------------------------------------- | -------------------------------------------------------- |
-| `Member`               | submit an activity                                                | –                                                        |
-| `Activity pending`     | nothing                                                           | the programme verifies the last activity                 |
-| `Activity verified`    | submit an activity                                                | the programme team grants an eligible, available benefit |
-| `Benefit eligible`     | request redemption (unexpired)                                    | – (an expired reward: the programme team)                |
-| `Redemption pending`   | show the reference                                                | the partner confirms and records the handover            |
-| `Redeemed`             | nothing                                                           | the partner records the handover                         |
-| `Fulfilled`            | nothing                                                           | the programme records the partner settlement             |
-| `Fulfilment failed`    | request again (restored, unexpired, a unit not known unavailable) | –                                                        |
-| `Suspended`, `Expired` | nothing                                                           | the programme team                                       |
+| State                  | Member may                                                               | Shown next actor                                         |
+| ---------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `Member`               | submit an activity                                                       | –                                                        |
+| `Activity pending`     | nothing                                                                  | the programme verifies the last activity                 |
+| `Activity verified`    | submit an activity                                                       | the programme team grants an eligible, available benefit |
+| `Benefit eligible`     | request redemption (unexpired)                                           | – (an expired reward: the programme team)                |
+| `Redemption pending`   | show the reference                                                       | the partner confirms and records the handover            |
+| `Redeemed`             | nothing                                                                  | the partner records the handover                         |
+| `Fulfilled`            | nothing                                                                  | the programme records the partner settlement             |
+| `Fulfilment failed`    | request again (restored, unexpired, a unit available (programme record)) | –                                                        |
+| `Suspended`, `Expired` | nothing                                                                  | the programme team                                       |
 
 The wallet refuses to prepare an activity outside `Member` and
 `Activity verified` (`loyalty_activity_not_permitted`, nothing journalled).
@@ -352,9 +352,11 @@ partner's proven `record_fulfilment`; an unknown outcome
 (`handover_recording`) is held with no action. After a proven definitive
 failure the reward is `restored`: the same grant, its original validity, the
 number of earlier failed handovers, and a new request (its own operation,
-unit and one-time reference) when a unit is not known to be unavailable;
-otherwise the page says none is available and the reward stays the member's
-until it expires. The original request's status reads `fulfilment_failed`,
+unit and one-time reference) only when the programme's record says a unit is available;
+otherwise the page says none is available, or that availability can't be
+confirmed (stock without full proof coverage is never treated as available),
+and the reward stays the member's until it expires. The runtime still
+reserves the attempt's unit at the request, or refuses it zero-write. The original request's status reads `fulfilment_failed`,
 never re-sent. If the member did not receive a handed-over benefit, the page
 says to contact the programme team with the redemption's date.
 

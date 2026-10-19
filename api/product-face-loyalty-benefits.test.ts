@@ -688,7 +688,7 @@ function world() {
       ).toISOString();
     },
     /** Studio's availability view says its proof coverage is incomplete. */
-    stockUnverified(status: string) {
+    stockUnverified(status: string | null) {
       stockStatus = status;
     },
     canonicalRead,
@@ -1522,6 +1522,44 @@ describe("the partner's handover, or its definitive failure restoring the same r
     expect(
       (await benefitsOf(browser)).redemptions.map((item) => item.operationId),
     ).not.toContain(operationOf(prepared));
+  });
+
+  it("a restored reward with stock the programme cannot confirm keeps its right and original validity but offers no retry; confirmed stock offers the same-right retry", async () => {
+    const browser = await granted();
+    const before = await viewOf(browser);
+    await confirmed(browser);
+    expect(w.fail("a", "available")).toBe("failed");
+    // The programme's availability proof coverage is incomplete: no unit is known to be available.
+    w.stockUnverified("proof_unverified");
+    let view = await viewOf(browser);
+    expect(view.reward).toEqual(
+      expect.objectContaining({
+        status: "restored",
+        validUntil: before.reward!.validUntil,
+        grantActionId: before.reward!.grantActionId,
+        failedHandovers: 1,
+      }),
+    );
+    expect(view.benefits[0].availability).toBe("unconfirmed");
+    expect(view.actions.requestRedemption).toBe(false);
+    const refused = await prepareRequest(browser);
+    expect(refused.body).toEqual(
+      expect.objectContaining({ code: "loyalty_redemption_not_permitted" }),
+    );
+    // Zero dispatch: only the first, failed attempt was ever sent.
+    expect(writes("loyalty.redemption.request")).toHaveLength(1);
+    // Confirmed available again: the same right, the same grant, offered.
+    w.stockUnverified(null);
+    view = await viewOf(browser);
+    expect(view.benefits[0].availability).toBe("available");
+    expect(view.actions.requestRedemption).toBe(true);
+    expect(view.reward!.grantActionId).toBe(before.reward!.grantActionId);
+    const prepared = await prepareRequest(browser);
+    expect(prepared.status).toBe(200);
+    expect((await submitPrepared(browser, prepared)).body.redemption).toEqual(
+      expect.objectContaining({ status: "requested" }),
+    );
+    expect(writes("loyalty.redemption.request")).toHaveLength(2);
   });
 
   it("an unknown handover outcome is held: never handed over, never restored, nothing offered", async () => {

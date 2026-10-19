@@ -388,14 +388,15 @@ async function proveBenefits(
             : state === "Fulfilled"
               ? "settlement"
               : null;
-  // A restored reward needs a unit to hand over again: never offered when
-  // the programme says none is available (its refusal would write nothing).
+  // A restored reward needs a unit to hand over again: offered only when the
+  // programme's record says one is available, never on stock it cannot
+  // confirm (the runtime still reserves the unit, or refuses zero-write).
   const restoredOffer =
     reward?.status === "restored" &&
     benefits.some(
       (item) =>
         item.benefitId === reward?.benefitId &&
-        item.availability !== "unavailable",
+        item.availability === "available",
     );
   return {
     ok: true,
