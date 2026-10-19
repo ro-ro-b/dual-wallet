@@ -306,6 +306,22 @@ object_id, proposal_id, request_id } }` exactly once. A replay of the same
   `issuance` with every `evidence` check `verified` (`operation_readback`
   shown as is); `activation_hash` only as the issuance content hash, under a
   technical disclosure.
+- Every transition after `begin` (`confirm`, `cancel`, `record_action`,
+  `status`) names its operation and is accepted only through the URL of the
+  exact ticket that operation was begun for (same programme, same object):
+  through another ticket's URL it is refused `unknown_operation` before any
+  runtime, provider or executor work.
+- The ticket's own status never contradicts entry. Only for a binding with
+  `tickets.admission`, Dual's own state in `targetStates` (with the issue
+  identity) reads "Entry recorded" (`admission_recorded`) on the ticket, the
+  home and the list: not "not confirmed", and never entry by itself. The
+  ticket header says "Entry confirmed" only after a verified `admitted` and
+  a Dual read of the ticket made after it that agrees. A legacy binding keeps
+  P4.2's status (`Admitted` stays "not confirmed").
+- An outcome that may follow a write (`admitted`, `admission_unverified`,
+  `outcome_unknown`) marks that ticket's detail and list reads stale, and an
+  open pass is read again: no pass proof read before an entry (for example
+  `operation_readback: current`) is shown after it.
 
 ## 7. Recovery
 
@@ -379,7 +395,23 @@ here is live, and the matching runtime leg is Studio's to implement.
   (`api/face-execution-binding.ts`); on a branded host it is the Tickets
   journey's (`api/host-journey-guard.ts`).
 - Native page: `app/_components/products/ticket-admission.tsx` on the ticket
-  detail when the binding carries `admission`.
+  detail when the binding carries `admission`; the ticket status
+  `admission_recorded` (`app/_domain/tickets.ts`) and the verified header in
+  `app/_components/products/tickets-view.tsx`; `useRefreshTicket`
+  (`app/_hooks/use-tickets.ts`) re-reads exactly that ticket's detail and
+  list.
 - Tests: `api/product-face-admission.test.ts` (real handlers, journal and
-  proxy), `app/_domain/ticket-admission.test.ts`,
-  `app/_components/products/ticket-admission.test.tsx`.
+  proxy, including an operation sent through another ticket's URL),
+  `app/_domain/ticket-admission.test.ts`, `app/_domain/tickets.test.ts`,
+  `app/_components/products/ticket-admission.test.tsx`,
+  `app/_components/products/tickets-view.test.tsx`.
+- Browser (FICTIONAL):
+  `npx playwright test -c playwright.tickets-admission.config.ts`
+  (`e2e/tickets-admission.spec.ts`; ports 3320, 4320 and 4330, set
+  `PLAYWRIGHT_CHROMIUM_EXECUTABLE` where needed) runs the real wallet against the local fake api-v3
+  (`MOCK_TICKETS_ADMISSION=1`) and a LOCAL FAKE runtime
+  (`e2e/tickets-home/fake-tickets-runtime.mjs`) that verifies each EdDSA
+  assertion. It covers the phone keyboard journey with whole-page checks
+  (header, pass before and after, home, list, reopen), a lost verification
+  read back under the original operation, and Escape with zero writes. The
+  fake is not Studio's runtime and proves nothing about it.

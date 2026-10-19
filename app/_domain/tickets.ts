@@ -6,7 +6,9 @@
 // `tickets` rules say which custom paths hold the event facts, the issue
 // operation identity and the state, and which states mean pending, issued or
 // ended. Anything the rules cannot place is "unconfirmed", never issued, and
-// admission is a constant "unavailable" until P4.3: no state is read as one.
+// the ticket's own `admission` stays "unavailable": no state is read as entry.
+// With ticket-admission-v1 (P4.3) the admission target state reads only as
+// "admission_recorded"; entry is confirmed only by the verified admission leg.
 import { sameHolder } from "@/app/_domain/product-face";
 import type { AdmissionRules } from "@/app/_domain/ticket-admission";
 
@@ -36,9 +38,13 @@ export interface TicketRules {
  * pending: the issue is recorded but not complete. issued: the holder holds
  * a valid ticket. ended: no longer usable (the brand's own ended states).
  * unconfirmed: the object's state or issue identity is not one the binding
- * recognises, so the wallet claims nothing.
+ * recognises, so the wallet claims nothing. admission_recorded (only for a
+ * binding with ticket-admission-v1): Dual's own state is the admission target.
+ * That alone is never entry, nor "unconfirmed"; entry is confirmed only by the
+ * runtime's request-bound verification (app/_domain/ticket-admission.ts).
  */
-export type TicketStatus = "pending" | "issued" | "ended" | "unconfirmed";
+export type TicketStatus =
+  "pending" | "issued" | "ended" | "unconfirmed" | "admission_recorded";
 
 export interface Ticket {
   objectId: string;
@@ -58,7 +64,10 @@ export interface Ticket {
   };
   entryClass: string | null;
   entryGuidance: string | null;
-  /** Admission is not part of Tickets until P4.3, whatever the object says. */
+  /**
+   * No Dual state is ever read as entry, whatever the object says; with
+   * ticket-admission-v1 entry comes only from the verified admission leg.
+   */
   admission: "unavailable";
   modifiedAt: string;
 }
@@ -125,14 +134,18 @@ function ticketTime(value: unknown): string | null {
 function statusOf(
   state: unknown,
   issueOperationId: string | null,
-  states: TicketRules["states"],
+  rules: TicketRules,
 ): TicketStatus {
+  const { states } = rules;
   // An issued or pending claim needs the original issue operation.
   if (typeof state !== "string") return "unconfirmed";
   if (states.ended.includes(state)) return "ended";
   if (issueOperationId === null) return "unconfirmed";
   if (states.issued.includes(state)) return "issued";
   if (states.pending.includes(state)) return "pending";
+  if (rules.admission?.targetStates.includes(state)) {
+    return "admission_recorded";
+  }
   return "unconfirmed";
 }
 
@@ -160,7 +173,7 @@ export function evaluateTicket(
   if (!sameHolder(source.owner, context.holder)) {
     return { ok: false, refusal: "not_owned" };
   }
-  const { fields, states } = context.rules;
+  const { fields } = context.rules;
   const issue = valueAt(source.custom, fields.issueOperation);
   const issueOperationId =
     typeof issue === "string" && ISSUE_OPERATION.test(issue) ? issue : null;
@@ -178,7 +191,7 @@ export function evaluateTicket(
       status: statusOf(
         valueAt(source.custom, fields.state),
         issueOperationId,
-        states,
+        context.rules,
       ),
       name,
       event: {
@@ -245,6 +258,7 @@ const STATUSES: readonly TicketStatus[] = [
   "issued",
   "ended",
   "unconfirmed",
+  "admission_recorded",
 ];
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 

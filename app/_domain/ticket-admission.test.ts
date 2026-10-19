@@ -10,6 +10,7 @@ import {
   checkAdmissionProposal,
   freshShowsAdmittedReadback,
   parseAdmissionPending,
+  admissionMayHaveWritten,
   parseAdmissionRules,
   parseTicketPass,
   type AdmissionProposal,
@@ -382,5 +383,38 @@ describe("the admission journal entry", () => {
       ok: false,
       error: "operation_already_submitted",
     });
+  });
+});
+
+describe("admissionMayHaveWritten", () => {
+  it("is true only where an entry was verified, recorded or sent", () => {
+    const request = {
+      requestId: REQUEST,
+      eventRef: "e",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date().toISOString(),
+    };
+    expect(admissionMayHaveWritten({ status: "none" })).toBe(false);
+    expect(admissionMayHaveWritten({ status: "expired", request })).toBe(false);
+    expect(
+      admissionMayHaveWritten({ status: "awaiting_holder", request }),
+    ).toBe(false);
+    expect(
+      admissionMayHaveWritten({ status: "unverified", requestId: REQUEST }),
+    ).toBe(true);
+    expect(
+      admissionMayHaveWritten({ status: "unknown", operationId: "adm-1" }),
+    ).toBe(true);
+    expect(
+      admissionMayHaveWritten({
+        status: "admitted",
+        admission: {
+          requestId: REQUEST,
+          actionId: "act-1",
+          admittedAt: new Date().toISOString(),
+          receiptId: "rcpt-1",
+        },
+      }),
+    ).toBe(true);
   });
 });

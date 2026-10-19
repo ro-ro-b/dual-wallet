@@ -50,18 +50,24 @@ export async function POST(request: NextRequest, { params }: Params) {
         case "begin":
           return beginAdmission(context, request, objectId, body.request_id);
         case "cancel":
-          return cancelAdmission(context, body.operation_id);
+          return cancelAdmission(context, objectId, body.operation_id);
         case "confirm":
-          return confirmAdmission(context, request, body.operation_id);
+          return confirmAdmission(
+            context,
+            request,
+            objectId,
+            body.operation_id,
+          );
         case "record_action":
           return recordAndVerifyAdmission(
             context,
             request,
+            objectId,
             body.operation_id,
             body.action_id,
           );
         case "status":
-          return admissionStatus(context, request, body.operation_id);
+          return admissionStatus(context, request, objectId, body.operation_id);
         default:
           return undefined;
       }

@@ -244,8 +244,11 @@ is the transfer journey's and is refused on a host without it.
 - Status is honest: `issued` and `pending` require the original issue
   operation identity recorded on the object at the binding's path; an
   unrecognised state, or a missing issue operation, is `unconfirmed`, never
-  issued. Admission is a constant "not available" until P4.3, whatever the
-  object says. A failed read or a host without ticket rules is shown as
+  issued. Without the binding's `tickets.admission` block, admission is a
+  constant "not available", whatever the object says; with it, Dual's
+  admission target state reads only `admission_recorded` ("Entry recorded"),
+  never entry by itself
+  ([P4.3 contract](development/p4-3-admission-contract.md)). A failed read or a host without ticket rules is shown as
   unavailable, never as an empty list.
 - The pages are protected: a signed-out visit signs in and returns to the exact
   list or ticket.

@@ -61,6 +61,7 @@ const sent = (transition: string) =>
 
 beforeEach(() => {
   fetchMock.mockClear();
+  onOutcome.mockReset();
   executeInventoryAction.mockReset().mockResolvedValue({ actionId: "act-1" });
   global.fetch = fetchMock as unknown as typeof fetch;
   wallet = {
@@ -134,12 +135,15 @@ beforeEach(() => {
   };
 });
 
-const view = () =>
+const onOutcome = jest.fn();
+const view = (recorded = false) =>
   render(
     <TicketAdmission
       slug="morrow-home"
       objectId={OBJECT}
       launchId={`launch-${"q".repeat(28)}`}
+      recorded={recorded}
+      onOutcome={onOutcome}
     />,
   );
 
@@ -227,6 +231,8 @@ it("an account change before signing stops the step; the attempt stays unknown, 
       slug="morrow-home"
       objectId={OBJECT}
       launchId={`launch-${"q".repeat(28)}`}
+      recorded={false}
+      onOutcome={onOutcome}
     />,
   );
   await user.click(
@@ -259,6 +265,8 @@ it("a session change between reserve and sign leaves the original operation unkn
           slug="morrow-home"
           objectId={OBJECT}
           launchId={`launch-${"q".repeat(28)}`}
+          recorded={false}
+          onOutcome={onOutcome}
         />,
       ),
     );
@@ -357,4 +365,100 @@ it("shows the pass and the original issue operation, never the content hash as o
       .closest("details")
       ?.querySelector("summary")?.textContent,
   ).toBe("Issuance content hash (technical)");
+});
+
+const passReply = (operationReadback: "current" | "superseded") => ({
+  status: 200,
+  body: {
+    pass: {
+      code: `DT1.tkt-1.${"d".repeat(20)}`,
+      issuance: {
+        recordId: "tkt-1",
+        objectId: OBJECT,
+        activationHash: "a".repeat(64),
+        birthOperationId: `op_${"b".repeat(40)}`,
+        birthIdempotencyKey: `tig:dual-operation:${"b".repeat(64)}`,
+        birthActionId: "act-mint-1",
+        operationReadback,
+      },
+    },
+  },
+});
+
+it("re-reads an open pass after the entry: no pre-entry proof stays, and the original issue is unchanged", async () => {
+  replies.pass = [passReply("current"), passReply("superseded")];
+  const user = userEvent.setup();
+  view();
+  await user.click(screen.getByRole("button", { name: "Show entry pass" }));
+  expect(
+    await screen.findByText("This is still the ticket's current operation."),
+  ).toBeTruthy();
+  const dialog = await openConfirmation(user);
+  await user.click(
+    within(dialog).getByRole("button", { name: "Confirm entry" }),
+  );
+  expect(
+    await screen.findByText(/this is the original issue operation/),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText("This is still the ticket's current operation."),
+  ).toBeNull();
+  // The exact original birth operation and action, before and after.
+  expect(screen.getByText(`op_${"b".repeat(40)}`)).toBeTruthy();
+  expect(screen.getByText("act-mint-1")).toBeTruthy();
+  expect(sent("pass")).toBe(2);
+  // Reported to the page, which reads the ticket again.
+  expect(onOutcome).toHaveBeenCalledWith(
+    expect.objectContaining({ status: "admitted" }),
+  );
+});
+
+it("a pass re-read that fails shows no proof at all, never the earlier one", async () => {
+  replies.pass = [passReply("current"), { status: 502, body: {} }];
+  const user = userEvent.setup();
+  view();
+  await user.click(screen.getByRole("button", { name: "Show entry pass" }));
+  await screen.findByText("This is still the ticket's current operation.");
+  const dialog = await openConfirmation(user);
+  await user.click(
+    within(dialog).getByRole("button", { name: "Confirm entry" }),
+  );
+  await screen.findByText(/Entry confirmed\. Gate request/);
+  await waitFor(() => expect(sent("pass")).toBe(2));
+  await waitFor(() =>
+    expect(
+      screen.queryByText("This is still the ticket's current operation."),
+    ).toBeNull(),
+  );
+  expect(screen.queryByText(`op_${"b".repeat(40)}`)).toBeNull();
+});
+
+it("an unknown outcome is reported too, since the write may have landed", async () => {
+  executeInventoryAction.mockRejectedValue(new Error("lost"));
+  const user = userEvent.setup();
+  view();
+  const dialog = await openConfirmation(user);
+  await user.click(
+    within(dialog).getByRole("button", { name: "Confirm entry" }),
+  );
+  await screen.findByText(/It will not be sent again/);
+  expect(onOutcome).toHaveBeenLastCalledWith({
+    status: "unknown",
+    operationId: OP,
+  });
+  expect(onOutcome).not.toHaveBeenCalledWith(
+    expect.objectContaining({ status: "admitted" }),
+  );
+});
+
+it("a ticket Dual already records as entered says so, and still needs the gate's check", async () => {
+  view(true);
+  expect(
+    screen.getByText(/Dual records an entry with this ticket\. Check it/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Entry confirmed/)).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Check for entry request" }),
+  ).toBeTruthy();
+  expect(fetchMock).not.toHaveBeenCalled();
 });

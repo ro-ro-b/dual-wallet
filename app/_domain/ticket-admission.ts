@@ -624,6 +624,19 @@ export type AdmissionState =
   /** Sent (reservation won): only its original operation's status may be read. */
   | { status: "unknown"; operationId: string };
 
+/**
+ * Whether the ticket may have changed by this state: an entry was verified,
+ * recorded without proof, or sent with its outcome unknown. Earlier reads of
+ * the ticket (its status, its pass proof) are then read again, never kept.
+ */
+export function admissionMayHaveWritten(state: AdmissionState): boolean {
+  return (
+    state.status === "admitted" ||
+    state.status === "unverified" ||
+    state.status === "unknown"
+  );
+}
+
 export function parseAdmissionState(
   value: unknown,
 ): AdmissionState | undefined {

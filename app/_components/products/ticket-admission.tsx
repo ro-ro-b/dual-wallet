@@ -5,10 +5,11 @@ import { useFormatter, useTranslations } from "next-intl";
 import { Alert } from "@/app/_components/design-system/alert";
 import { Button } from "@/app/_components/design-system/button";
 import { ModalDialog } from "@/app/_components/design-system/modal-dialog";
-import type {
-  AdmissionConfirmation,
-  AdmissionState,
-  TicketPass,
+import {
+  admissionMayHaveWritten,
+  type AdmissionConfirmation,
+  type AdmissionState,
+  type TicketPass,
 } from "@/app/_domain/ticket-admission";
 import {
   executorIdentityOf,
@@ -70,10 +71,16 @@ export function TicketAdmission({
   slug,
   objectId,
   launchId,
+  recorded,
+  onOutcome,
 }: {
   slug: string;
   objectId: string;
   launchId: string;
+  /** Dual's own state already reads as the admission target. */
+  recorded: boolean;
+  /** Every settled admission state, so the page can read the ticket again. */
+  onOutcome: (state: AdmissionState) => void;
 }) {
   const t = useTranslations("tickets.admission");
   const format = useFormatter();
@@ -82,6 +89,10 @@ export function TicketAdmission({
   const [pass, setPass] = useState<TicketPass | "loading" | "failed" | null>(
     null,
   );
+  // Whether the holder opened the pass, and which read is the latest: a pass
+  // proof read before an entry no longer describes the ticket after it.
+  const passOpen = useRef(false);
+  const passRead = useRef(0);
   // The live session and mount, read by the executor at each async boundary.
   const current = useRef<ExecutorIdentity | null>(null);
   const mounted = useRef(false);
@@ -103,10 +114,16 @@ export function TicketAdmission({
         })
       : t("notStated");
 
+  function settle(state: AdmissionState) {
+    setView({ kind: "state", state });
+    onOutcome(state);
+    if (passOpen.current && admissionMayHaveWritten(state)) void showPass();
+  }
+
   async function check() {
     setView({ kind: "busy", step: "checking" });
     try {
-      setView({ kind: "state", state: await checkAdmission(where) });
+      settle(await checkAdmission(where));
     } catch (error) {
       setView({ kind: "failed", code: failureOf(error) });
     }
@@ -145,12 +162,14 @@ export function TicketAdmission({
       await confirmAdmission(where, operationId);
     } catch (error) {
       // Not won: possibly reserved, so only the original operation's status.
-      setView(
+      if (
         failureOf(error) === "unavailable" ||
-          (error instanceof AdmissionError && error.code === "outcome_unknown")
-          ? { kind: "state", state: { status: "unknown", operationId } }
-          : { kind: "failed", code: failureOf(error) },
-      );
+        (error instanceof AdmissionError && error.code === "outcome_unknown")
+      ) {
+        settle({ status: "unknown", operationId });
+      } else {
+        setView({ kind: "failed", code: failureOf(error) });
+      }
       return;
     }
     let actionId: string;
@@ -171,37 +190,38 @@ export function TicketAdmission({
       });
     } catch {
       // Won but not proven: never signed or sent again from here.
-      setView({ kind: "state", state: { status: "unknown", operationId } });
+      settle({ status: "unknown", operationId });
       return;
     }
     setView({ kind: "sending", step: "verifying", operationId });
     try {
-      const outcome = await recordAdmission(where, operationId, actionId);
-      setView({ kind: "state", state: outcome });
+      settle(await recordAdmission(where, operationId, actionId));
     } catch {
-      setView({ kind: "state", state: { status: "unknown", operationId } });
+      settle({ status: "unknown", operationId });
     }
   }
 
   async function status(operationId: string) {
     setView({ kind: "busy", step: "statusChecking" });
     try {
-      setView({
-        kind: "state",
-        state: await admissionStatus(where, operationId),
-      });
+      settle(await admissionStatus(where, operationId));
     } catch {
-      setView({ kind: "state", state: { status: "unknown", operationId } });
+      settle({ status: "unknown", operationId });
     }
   }
 
   async function showPass() {
+    passOpen.current = true;
+    const read = ++passRead.current;
     setPass("loading");
+    let next: TicketPass | "failed";
     try {
-      setPass(await readTicketPass(where));
+      next = await readTicketPass(where);
     } catch {
-      setPass("failed");
+      next = "failed";
     }
+    // Only the latest read shows: never an older proof over a newer one.
+    if (read === passRead.current && mounted.current) setPass(next);
   }
 
   const checkButton = (
@@ -215,7 +235,7 @@ export function TicketAdmission({
     case "idle":
       body = (
         <>
-          <p>{t("intro")}</p>
+          <p>{t(recorded ? "introRecorded" : "intro")}</p>
           {checkButton}
         </>
       );

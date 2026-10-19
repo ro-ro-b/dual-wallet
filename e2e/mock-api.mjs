@@ -5,6 +5,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import {
+  ADMISSION_TEMPLATE,
+  ADMISSION_TICKET,
   OTHER_ORGANIZATION,
   TICKET_IDS,
   TICKET_TEMPLATE,
@@ -290,8 +292,54 @@ function seedTickets(store) {
   return store;
 }
 
+// P4.3 admission fixture (MOCK_TICKETS_ADMISSION=1): one FICTIONAL ticket on
+// the shared Tickets service's closed 16-key template, held by the holder.
+const admissionFixture = process.env.MOCK_TICKETS_ADMISSION === "1";
+function seedAdmissionTicket(store) {
+  const now = Date.now();
+  store.set(ADMISSION_TICKET, {
+    id: ADMISSION_TICKET,
+    org_id: expectedOrganizationId,
+    metadata: { name: "Night Market entry", description: "Fictional ticket" },
+    owner: PROGRAMME.walletAddress,
+    template_id: ADMISSION_TEMPLATE,
+    nonce: 1,
+    version: 1,
+    state_hash: `0x${ADMISSION_TICKET}`,
+    content_hash: `0x${ADMISSION_TICKET}`,
+    integrity_hash: `0x${ADMISSION_TICKET}`,
+    prev_integrity_hash: `0x${ADMISSION_TICKET}`,
+    custom: {
+      accessClass: "Standing",
+      activation_hash: "a".repeat(64),
+      admissionStatus: "Valid",
+      admissionWindowEndsAt: new Date(now + 4 * 3_600_000).toISOString(),
+      // The current minute: always the viewer's own calendar day, in any
+      // zone, so the home's Today shows it at whatever time the suite runs.
+      admissionWindowStartsAt: new Date(
+        Math.floor(now / 60_000) * 60_000,
+      ).toISOString(),
+      app_namespace: "fictional-tickets",
+      eventRef: "night-market-fictional",
+      idempotency_key: `tig:dual-operation:${"b".repeat(64)}`,
+      operation_id: `op_${"b".repeat(40)}`,
+      product_type: "event_ticket",
+      recipient_mint_projection: true,
+      recordId: "tkt-night-0001",
+      seatRef: "",
+      state: "Valid",
+      title: "Night Market",
+      venueRef: "Pier Shed (fictional)",
+    },
+    when_created: "2026-10-01T09:00:00.000Z",
+    when_modified: "2026-10-01T09:00:00.000Z",
+  });
+  return store;
+}
+
 let objects = seedProgramme();
 if (ticketsFixture) seedTickets(objects);
+if (admissionFixture) seedAdmissionTicket(objects);
 let actionLogs = [];
 // Test mode: execute answers to drop after the action ran (a lost response).
 let loseExecuteResponses = 0;
@@ -504,6 +552,8 @@ async function handleProgramme(request, response, url) {
   // Test hooks for the product-face suite. Local fake only.
   if (method === "POST" && path === "/__test__/reset") {
     objects = seedProgramme();
+    if (ticketsFixture) seedTickets(objects);
+    if (admissionFixture) seedAdmissionTicket(objects);
     actionLogs = [];
     loseExecuteResponses = 0;
     return respond(response, 200, { ok: true });
@@ -701,6 +751,16 @@ async function handleProgramme(request, response, url) {
     });
   }
 
+  // The wallet executor's prepare (admission fixture only): the current
+  // action number; it reserves and changes nothing.
+  if (
+    admissionFixture &&
+    method === "POST" &&
+    path === "/ebus/prepare" &&
+    authorized(request)
+  ) {
+    return respond(response, 200, { nonce: 1, challenge: "ZmljdGlvbmFs" });
+  }
   if (method === "POST" && path === "/ebus/execute" && authorized(request)) {
     const body = await readBody(request);
     const update = body?.action?.update;

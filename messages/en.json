@@ -456,17 +456,22 @@
       "issued": "Issued",
       "pending": "Being issued",
       "ended": "No longer valid",
-      "unconfirmed": "Not confirmed"
+      "unconfirmed": "Not confirmed",
+      "admission_recorded": "Entry recorded",
+      "entry_confirmed": "Entry confirmed"
     },
     "statusExplanation": {
       "issued": "Dual records this ticket as issued to your account.",
       "pending": "This ticket is still being issued. It is not valid yet; check back shortly.",
       "ended": "This ticket is no longer valid.",
-      "unconfirmed": "Dual holds this ticket for your account, but its issue could not be confirmed. Do not rely on it yet."
+      "unconfirmed": "Dual holds this ticket for your account, but its issue could not be confirmed. Do not rely on it yet.",
+      "admission_recorded": "Dual records an entry with this ticket. That alone does not confirm it: check it with the gate below.",
+      "entry_confirmed": "The gate confirmed your entry with this ticket, and Dual records it."
     },
     "admission": {
       "title": "Entry",
       "intro": "When gate staff ask to admit you, check for their request here and confirm it yourself. Nothing is sent until you confirm.",
+      "introRecorded": "Dual records an entry with this ticket. Check it with the gate to see whether it is confirmed.",
       "check": "Check for entry request",
       "checking": "Checking for an entry request…",
       "none": "There is no entry request for this ticket right now.",

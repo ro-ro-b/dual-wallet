@@ -28,8 +28,10 @@ On a separately provisioned branded wallet whose configuration sets
   `unconfirmed`. Issued and pending require the original issue operation
   identity on the object; anything the binding does not recognise is
   `unconfirmed`, never issued.
-- Admission is a constant "not available yet" (P4.3). No state is read as
-  admitted, used or checked in.
+- Without `tickets.admission` on the binding, admission is a constant "not
+  available yet" and no state is read as admitted, used or checked in. With
+  it (P4.3, below), Dual's admission target state reads only "Entry
+  recorded", never entry by itself.
 - Missing capability (no ticket rules, journey off, generic wallet) is 403 /
   not found, shown as unavailable. A failed upstream read is "unavailable",
   never "no tickets".
@@ -70,6 +72,31 @@ wallet's own parser; session and signing keys are generated per process.
 - It cannot run alongside another `next dev` in the same checkout (Next.js
   holds one dev lock per project directory); use a separate checkout.
 - Fixture success is not hosted or customer acceptance.
+
+## P4.3 holder-confirmed admission (ticket-admission-v1, source only)
+
+The contract is [p4-3-admission-contract.md](p4-3-admission-contract.md); its
+§11 lists the wallet paths and tests. In short, only for a binding whose
+`tickets.admission` block matches the contract exactly:
+
+- The ticket page offers "Check for entry request" (the holder's own fetch, no
+  polling), a native confirmation of server-read facts, and signs exactly the
+  confirmed four-leaf update through the existing executor after this
+  request's own won reservation. "Entry confirmed" only from the runtime's
+  request-bound verification plus the wallet's own fresh Dual read.
+- Every transition after `begin` is bound to the exact ticket in the URL; an
+  operation sent through another ticket's path is refused with no runtime,
+  provider or executor call.
+- The whole page stays coherent: the ticket status `admission_recorded`
+  ("Entry recorded") on detail, home and list; the header "Entry confirmed"
+  only after a verified entry and a later Dual read that agrees; an open pass
+  re-read after any outcome that may follow a write, so the original birth
+  operation and action are shown before and after while no pre-entry
+  `operation_readback: current` is kept.
+- Legacy bindings are unchanged. The browser proof
+  (`npx playwright test -c playwright.tickets-admission.config.ts`) runs
+  against a LOCAL FAKE runtime and fake api-v3 only; the shared Tickets
+  service's matching leg is Studio's to implement and is not live.
 
 ## Boundaries kept
 

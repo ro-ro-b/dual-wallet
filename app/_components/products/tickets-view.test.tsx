@@ -53,7 +53,7 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function view(props: { objectId?: string } = {}) {
+function view(props: { objectId?: string; admission?: boolean } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -362,5 +362,88 @@ describe("one ticket", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(
       "couldn't read",
     );
+  });
+});
+
+describe("one ticket with ticket-admission-v1", () => {
+  const ADMISSION = `/api/faces/morrow-home/tickets/${TICKET}/admission`;
+  const admitted = {
+    status: "admitted",
+    admission: {
+      requestId: `tad-${"1".repeat(32)}`,
+      actionId: "act-1",
+      admittedAt: "2026-10-18T19:01:00.000Z",
+      receiptId: "rcpt-1",
+    },
+  };
+  let ticketStatus: string;
+  let checked: unknown;
+  beforeEach(() => {
+    ticketStatus = "issued";
+    checked = admitted;
+    fetchMock.mockImplementation((url: string) =>
+      url === ADMISSION
+        ? json({ state: checked })
+        : json({ ticket: wire({ status: ticketStatus }) }),
+    );
+  });
+  const header = () =>
+    screen.getByRole("heading", { level: 1, name: "Harbour Night" })
+      .parentElement!.parentElement!;
+  const reads = () =>
+    fetchMock.mock.calls.filter(([url]) => url !== ADMISSION).length;
+
+  it("says Dual's recorded entry, never 'not confirmed', and confirms it only from the gate's check and a fresh read", async () => {
+    ticketStatus = "admission_recorded";
+    view({ objectId: TICKET, admission: true });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+    expect(within(header()).getByText("Entry recorded")).toBeTruthy();
+    expect(screen.getByText(/That alone does not confirm it/)).toBeTruthy();
+    expect(screen.queryByText("Not confirmed")).toBeNull();
+    expect(screen.queryByText("Entry confirmed")).toBeNull();
+    // The issue reference is not the binding's content hash.
+    expect(screen.queryByText("issue-op-0001")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Check for entry request" }),
+    );
+    await waitFor(() =>
+      expect(within(header()).getByText("Entry confirmed")).toBeTruthy(),
+    );
+    expect(reads()).toBe(2);
+    expect(screen.queryByText("Entry recorded")).toBeNull();
+  });
+
+  it("a verified entry that a fresh Dual read does not show stays unconfirmed in the header", async () => {
+    // The ticket read after the gate's answer is still Valid (or drifted).
+    view({ objectId: TICKET, admission: true });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Check for entry request" }),
+    );
+    await screen.findByText(/Entry confirmed\. Gate request/);
+    await waitFor(() => expect(reads()).toBe(2));
+    expect(within(header()).getByText("Issued")).toBeTruthy();
+    expect(within(header()).queryByText("Entry confirmed")).toBeNull();
+  });
+
+  it("an answer that changed nothing does not read the ticket again", async () => {
+    checked = { status: "none" };
+    view({ objectId: TICKET, admission: true });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Check for entry request" }),
+    );
+    await screen.findByText(/no entry request/);
+    expect(reads()).toBe(1);
+  });
+
+  it("a legacy binding keeps the ticket's own status and no entry steps", async () => {
+    ticketStatus = "unconfirmed";
+    view({ objectId: TICKET });
+    expect(await screen.findByText("Not confirmed")).toBeTruthy();
+    expect(screen.getByText(/Entry check-in is not available/)).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Check for entry request" }),
+    ).toBeNull();
   });
 });

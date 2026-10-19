@@ -546,12 +546,16 @@ beforeEach(() => {
     whenCreated: new Date(),
     whenModified: new Date(),
   });
-  getObjectById.mockReset().mockImplementation(async () => ({
-    ...dual,
-    custom: structuredClone(dual.custom),
-    metadata: { name: "Harbour Night entry" },
-    whenModified: new Date("2026-10-01T00:00:00Z"),
-  }));
+  getObjectById
+    .mockReset()
+    .mockImplementation(async ({ objectId }: { objectId: string }) => ({
+      ...dual,
+      // Any other ticket id is another, equally valid ticket of this holder.
+      id: objectId,
+      custom: structuredClone(dual.custom),
+      metadata: { name: "Harbour Night entry" },
+      whenModified: new Date("2026-10-01T00:00:00Z"),
+    }));
 });
 afterEach(() => {
   global.fetch = original;
@@ -792,6 +796,43 @@ describe("repeats and lost replies keep the original operation", () => {
       ).body.outcome,
     ).toEqual(expect.objectContaining({ status: "admitted" }));
     expect(services.executions).toBe(1);
+  });
+});
+
+describe("an operation belongs to exactly its URL ticket", () => {
+  it("ticket A's operation sent through ticket B's path is refused with no runtime, reserve or execute", async () => {
+    const services = fakeServices();
+    global.fetch = services.fetchImpl as unknown as typeof fetch;
+    const browser = new Browser();
+    const { operationId } = await begun(browser);
+    const before = services.calls.length;
+    const B = "7d00000000000000000000b9";
+    for (const body of [
+      { transition: "confirm", operation_id: operationId },
+      { transition: "cancel", operation_id: operationId },
+      {
+        transition: "record_action",
+        operation_id: operationId,
+        action_id: "act-admit-0001",
+      },
+      { transition: "status", operation_id: operationId },
+    ]) {
+      expect(await browser.admission(body, B)).toEqual({
+        status: 404,
+        body: { code: "unknown_operation" },
+      });
+    }
+    expect(services.calls.length).toBe(before);
+    expect(services.executions).toBe(0);
+    // A's own step is untouched and still confirmable on A's own path.
+    expect(
+      (
+        await browser.admission({
+          transition: "confirm",
+          operation_id: operationId,
+        })
+      ).body,
+    ).toEqual({ reservation: "won" });
   });
 });
 

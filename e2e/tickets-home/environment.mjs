@@ -214,3 +214,136 @@ export function fixtureEnvironment() {
     },
   };
 }
+
+// ------------------------------------------------- admission (P4.3) variant
+// A separate FICTIONAL fixture for ticket-admission-v1: one closed-template
+// ticket (the shared Tickets service's 16-key map), a binding with the
+// optional `tickets.admission` block, and a LOCAL FAKE Tickets runtime
+// (e2e/tickets-home/fake-tickets-runtime.mjs) that verifies the wallet's
+// assertions with this run's public key. Nothing here is the shared service.
+export const ADMISSION_TEMPLATE = "7d0000000000000000000002";
+export const ADMISSION_TICKET = "7d00000000000000000000c1";
+
+export function admissionPorts() {
+  return {
+    wallet: Number(process.env.TICKETS_ADMISSION_WALLET_PORT || 3320),
+    api: Number(process.env.TICKETS_ADMISSION_API_PORT || 4320),
+    runtime: Number(process.env.TICKETS_ADMISSION_RUNTIME_PORT || 4330),
+  };
+}
+
+const ADMISSION_CUSTOM_KEYS = [
+  "accessClass",
+  "activation_hash",
+  "admissionStatus",
+  "admissionWindowEndsAt",
+  "admissionWindowStartsAt",
+  "app_namespace",
+  "eventRef",
+  "idempotency_key",
+  "operation_id",
+  "product_type",
+  "recipient_mint_projection",
+  "recordId",
+  "seatRef",
+  "state",
+  "title",
+  "venueRef",
+];
+
+export function admissionRegistry(runtimeOrigin) {
+  const [binding] = faceRegistry();
+  return [
+    {
+      ...binding,
+      origin: runtimeOrigin,
+      templateIds: [ADMISSION_TEMPLATE],
+      canonicalRegistration: {
+        stateField: "state",
+        lifecycleTargetField: "admissionStatus",
+        settledStates: ["Valid"],
+        unconfirmedStates: ["Issuing"],
+        endedStates: ["Cancelled", "Expired"],
+      },
+      // No settle step: this programme's tickets are not registered here.
+      settle: undefined,
+      tickets: {
+        fields: {
+          event: "title",
+          startsAt: "admissionWindowStartsAt",
+          venue: "venueRef",
+          entryClass: "accessClass",
+          entryGuidance: null,
+          // The P4.2 "issuance recorded" gate only: a content hash, never
+          // shown as an operation (contract §4).
+          issueOperation: "activation_hash",
+          state: "state",
+        },
+        states: {
+          pending: [],
+          issued: ["Valid"],
+          ended: ["Cancelled", "Expired"],
+        },
+        admission: {
+          contract: "ticket-admission-v1",
+          action: "update",
+          inputPath: "data.custom",
+          leaves: {
+            state: { enum: ["Admitted"] },
+            admissionStatus: { enum: ["Admitted"] },
+            operation_id: { runtimeIssued: "^op_[0-9a-f]{40}$" },
+            idempotency_key: {
+              runtimeIssued: "^tig:dual-operation:[0-9a-f]{64}$",
+            },
+          },
+          customKeys: ADMISSION_CUSTOM_KEYS,
+          fromStates: ["Valid"],
+          targetStates: ["Admitted"],
+          preserveUnlisted: true,
+        },
+      },
+    },
+  ];
+}
+
+export function admissionFixtureEnvironment() {
+  const { wallet, api, runtime } = admissionPorts();
+  const origin = `http://localhost:${wallet}`;
+  const runtimeOrigin = `http://localhost:${runtime}`;
+  const registry = JSON.stringify(admissionRegistry(runtimeOrigin));
+  const host = hostConfiguration(origin);
+  const keys = generateKeyPairSync("ed25519");
+  return {
+    origin,
+    apiOrigin: `http://127.0.0.1:${api}`,
+    runtimeOrigin,
+    api: {
+      MOCK_API_PORT: String(api),
+      MOCK_TICKETS_ADMISSION: "1",
+      DEFAULT_ORGANIZATION_ID: FICTIONAL_ORGANIZATION,
+      PRODUCT_FACE_APPLICATIONS: registry,
+    },
+    runtime: {
+      FAKE_TICKETS_RUNTIME_PORT: String(runtime),
+      FAKE_TICKETS_API_ORIGIN: `http://127.0.0.1:${api}`,
+      FAKE_TICKETS_WALLET_ORIGIN: origin,
+      FAKE_TICKETS_APPLICATION: "fictional.tickets.harbour-nights",
+      FAKE_TICKETS_RUNTIME_ORIGIN: runtimeOrigin,
+      FACE_ASSERTION_PUBLIC_KEY: keys.publicKey
+        .export({ format: "pem", type: "spki" })
+        .toString(),
+    },
+    wallet: {
+      API_URL: `http://127.0.0.1:${api}`,
+      SESSION_SECRET: randomBytes(32).toString("base64"),
+      NEXT_PUBLIC_APP_URL: origin,
+      PRODUCT_FACE_APPLICATIONS: registry,
+      WALLET_HOST_CONFIGURATION: host.raw,
+      WALLET_HOST_CONFIGURATION_SHA256: host.pin,
+      FACE_ASSERTION_SIGNING_KEY: keys.privateKey
+        .export({ format: "pem", type: "pkcs8" })
+        .toString(),
+      FACE_ASSERTION_KEY_ID: "fictional-tickets-fixture",
+    },
+  };
+}

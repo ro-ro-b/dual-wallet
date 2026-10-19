@@ -346,11 +346,22 @@ export async function beginAdmission(
   };
 }
 
-function admissionEntry(context: FaceRequestContext, operationId: unknown) {
+/**
+ * This launch's admission step for exactly this operation AND the ticket the
+ * request's URL names: an operation of another ticket is not found here, so
+ * nothing is read, reserved, executed or verified for it.
+ */
+function admissionEntry(
+  context: FaceRequestContext,
+  operationId: unknown,
+  objectId: string,
+) {
   const entry = context.journal.entries.find(
     (item) => item.operationId === operationId,
   );
-  return entry?.kind === "admission" && entry.slug === context.binding.slug
+  return entry?.kind === "admission" &&
+    entry.slug === context.binding.slug &&
+    entry.objectId === objectId
     ? entry
     : undefined;
 }
@@ -378,9 +389,10 @@ function applyIn(
 /** Cancel before anything was reserved: zero writes; refused once sent. */
 export function cancelAdmission(
   context: FaceRequestContext,
+  objectId: string,
   operationId: unknown,
 ): AdmissionResult<{ entry: FaceJournalEntry }> {
-  const entry = admissionEntry(context, operationId);
+  const entry = admissionEntry(context, operationId, objectId);
   if (!entry) return fail("unknown_operation", 404);
   return applyIn(context.journal, {
     kind: "cancel",
@@ -397,11 +409,12 @@ export function cancelAdmission(
 export async function confirmAdmission(
   context: FaceRequestContext,
   request: NextRequest,
+  objectId: string,
   operationId: unknown,
 ): Promise<AdmissionResult<{ reservation: "won" }>> {
   const rules = admissionRules(context);
   if (!rules) return fail("capability_not_granted", 403);
-  const entry = admissionEntry(context, operationId);
+  const entry = admissionEntry(context, operationId, objectId);
   if (!entry) return fail("unknown_operation", 404);
   if (entry.phase !== "confirming") return fail("operation_conflict", 409);
   const read = await freshTicket(context, rules, entry.objectId);
@@ -534,12 +547,13 @@ function freshShowsAdmissionHash(custom: unknown, entry: FaceJournalEntry) {
 export async function recordAndVerifyAdmission(
   context: FaceRequestContext,
   request: NextRequest,
+  objectId: string,
   operationId: unknown,
   actionId: unknown,
 ): Promise<AdmissionResult<{ outcome: Verified }>> {
   const rules = admissionRules(context);
   if (!rules) return fail("capability_not_granted", 403);
-  const entry = admissionEntry(context, operationId);
+  const entry = admissionEntry(context, operationId, objectId);
   if (!entry) return fail("unknown_operation", 404);
   if (
     typeof actionId !== "string" ||
@@ -603,14 +617,23 @@ function settleIfAdmitted(
 export async function admissionStatus(
   context: FaceRequestContext,
   request: NextRequest,
+  objectId: string,
   operationId: unknown,
 ): Promise<AdmissionResult<{ outcome: Verified }>> {
   const rules = admissionRules(context);
   if (!rules) return fail("capability_not_granted", 403);
+  // Only this programme's and this URL's ticket: another ticket's operation
+  // is not found here.
   const entry = [
     ...context.journal.entries,
     ...readFaceAdmissionHistory(request, context.scope),
-  ].find((item) => item.operationId === operationId && sentAdmissionStep(item));
+  ].find(
+    (item) =>
+      item.operationId === operationId &&
+      item.slug === context.binding.slug &&
+      item.objectId === objectId &&
+      sentAdmissionStep(item),
+  );
   if (!entry) return fail("unknown_operation", 404);
   const input = {
     proposal_id: entry.proposalId,

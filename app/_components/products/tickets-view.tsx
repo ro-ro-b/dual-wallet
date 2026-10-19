@@ -10,20 +10,36 @@ import { EmptyState } from "@/app/_components/design-system/empty-state";
 import { PageHeader } from "@/app/_components/design-system/page-header";
 import { useFocusOnMount } from "@/app/_hooks/use-focus-on-mount";
 import { newFaceLaunchId } from "@/app/_domain/product-face";
+import {
+  admissionMayHaveWritten,
+  type AdmissionState,
+} from "@/app/_domain/ticket-admission";
 import type { Ticket, TicketStatus } from "@/app/_domain/tickets";
-import { useTicket, useTickets } from "@/app/_hooks/use-tickets";
+import {
+  useRefreshTicket,
+  useTicket,
+  useTickets,
+} from "@/app/_hooks/use-tickets";
 import { useSession } from "@/app/_providers/session-provider";
 import { TicketAdmission } from "@/app/_components/products/ticket-admission";
 import { TicketsError } from "@/app/_services/tickets.client";
 
-const statusTone: Record<TicketStatus, string> = {
+/**
+ * A ticket's own status, or (on its detail page only) an entry the gate
+ * verified and a later Dual read agrees with.
+ */
+type TicketBadge = TicketStatus | "entry_confirmed";
+
+const statusTone: Record<TicketBadge, string> = {
   issued: "status-completed",
   pending: "status-pending",
   ended: "status-neutral",
   unconfirmed: "status-neutral",
+  admission_recorded: "status-neutral",
+  entry_confirmed: "status-completed",
 };
 
-export function TicketStatusBadge({ status }: { status: TicketStatus }) {
+export function TicketStatusBadge({ status }: { status: TicketBadge }) {
   const t = useTranslations("tickets.status");
   return <span className={`status ${statusTone[status]}`}>{t(status)}</span>;
 }
@@ -244,7 +260,15 @@ function TicketDetail({
   const t = useTranslations("tickets");
   const { wallet } = useSession();
   const query = useTicket({ slug, launchId, walletId: wallet?.id, objectId });
+  const refresh = useRefreshTicket({ slug, walletId: wallet?.id, objectId });
+  // When the gate last verified this entry. The header says so only once a
+  // Dual read made after that agrees; Dual's own state alone never does.
+  const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
   const startsAt = useStartsAt();
+  function onOutcome(state: AdmissionState) {
+    if (state.status === "admitted") setVerifiedAt(Date.now());
+    if (admissionMayHaveWritten(state)) void refresh();
+  }
   const back = (
     <Link
       className={buttonClass("secondary")}
@@ -269,13 +293,20 @@ function TicketDetail({
   if (query.isPending) return <p role="status">{t("loading")}</p>;
   const ticket = query.data;
   const when = startsAt(ticket.event.startsAt);
+  const status: TicketBadge =
+    admission &&
+    verifiedAt !== null &&
+    query.dataUpdatedAt >= verifiedAt &&
+    ticket.status === "admission_recorded"
+      ? "entry_confirmed"
+      : ticket.status;
   return (
     <>
       <PageHeader
         eyebrow={t("detailEyebrow")}
         title={ticket.event.title}
-        description={t(`statusExplanation.${ticket.status}`)}
-        action={<TicketStatusBadge status={ticket.status} />}
+        description={t(`statusExplanation.${status}`)}
+        action={<TicketStatusBadge status={status} />}
       />
       <section className="card ticket-detail" aria-labelledby="ticket-facts">
         <h2 id="ticket-facts">{t("factsTitle")}</h2>
@@ -311,7 +342,13 @@ function TicketDetail({
         {admission ? null : <p>{t("admissionUnavailable")}</p>}
       </section>
       {admission ? (
-        <TicketAdmission slug={slug} objectId={objectId} launchId={launchId} />
+        <TicketAdmission
+          slug={slug}
+          objectId={objectId}
+          launchId={launchId}
+          recorded={ticket.status === "admission_recorded"}
+          onOutcome={onOutcome}
+        />
       ) : null}
       <div className="load-more">{back}</div>
     </>
@@ -338,7 +375,9 @@ export function TicketsView({
   return (
     <div className="tickets-view">
       {objectId ? (
+        // Keyed: another ticket never inherits this one's entry or pass.
         <TicketDetail
+          key={objectId}
           slug={slug}
           objectId={objectId}
           launchId={launchId}
