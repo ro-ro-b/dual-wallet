@@ -346,6 +346,25 @@ function world() {
         semantic: "create_membership",
       };
     },
+    /**
+     * Staff: Studio's REST issuer-held birth, TWO provider writes of the one
+     * issuer-owned object (Studio src/dual-activation.mjs
+     * restPostMintUpdates): the mint (nonce 1), then its post-mint update
+     * (nonce 2), whose receipt is the opening the pass names. `between`
+     * lands another issuer update before it (a gap).
+     */
+    bear({ between = false } = {}) {
+      act(CANON, "mint", ISSUER, base("Member"), {
+        templateId: CANON_TEMPLATE,
+        owner: ISSUER,
+        to: ISSUER,
+      });
+      if (between) act(CANON, "update", ISSUER, base("Member"));
+      opening = {
+        ...act(CANON, "update", ISSUER, base("Member")),
+        semantic: "create_membership",
+      };
+    },
     /** Runtime: the member's opening pass, minted by the issuer to them. */
     pass(custom: Partial<Record<string, unknown>> = {}) {
       act(
@@ -1085,6 +1104,118 @@ describe("membership is active only from fresh, exact, role-bound evidence", () 
     w.objects.get(PASS)!.owner = FORGER;
     expect((await membership(browser)).membership).toEqual({
       status: "pending_pass",
+    });
+  });
+});
+
+describe("a two-effect birth (issuer mint, then its post-mint update) proves the opening", () => {
+  /** Reads of the canonical's first public change (its birth). */
+  const birthReads = () =>
+    objectsApi.listStateChangesPublic.mock.calls.filter(
+      ([input]: [{ objectId: string; order?: string }]) =>
+        input.objectId === CANON && input.order === "asc",
+    ).length;
+  const mintLog = () => w.logs.get(w.changes[0].actionId)!;
+
+  /** Joined, approved, born in two effects and passed. */
+  async function bornMember({ between = false } = {}) {
+    const browser = new Browser();
+    await browser.loyalty({ transition: "join", consent });
+    w.approve();
+    w.bear({ between });
+    w.pass();
+    return browser;
+  }
+
+  it("is pending its pass, then active and earning; the pass names the update", async () => {
+    const browser = new Browser();
+    await browser.loyalty({ transition: "join", consent });
+    w.approve();
+    w.bear();
+    expect((await membership(browser)).membership).toEqual({
+      status: "pending_pass",
+    });
+    w.pass();
+    const [mint, update] = w.changes;
+    expect([mint.actionName, mint.nextNonce]).toEqual(["mint", 1]);
+    expect([update.actionName, update.nextNonce]).toEqual(["update", 2]);
+    expect(w.objects.get(PASS)!.custom.opening_action_id).toBe(update.actionId);
+    expect((await membership(browser)).membership).toEqual({
+      status: "active",
+      membership: expect.objectContaining({ objectId: CANON, state: "Member" }),
+    });
+    expect(birthReads()).toBeGreaterThan(0);
+    const sent = await submit(browser, "Workshop sign-in 0042");
+    expect(sent.body.submission).toEqual(
+      expect.objectContaining({ status: "submitted" }),
+    );
+  });
+
+  it("a single-mint opening still proves exactly as before, with no birth read", async () => {
+    const browser = await activeMember();
+    expect((await membership(browser)).membership).toEqual({
+      status: "active",
+      membership: expect.objectContaining({ objectId: CANON, state: "Member" }),
+    });
+    expect(birthReads()).toBe(0);
+  });
+
+  it.each([
+    [
+      "a first change that is not a mint",
+      false,
+      () => {
+        w.changes[0].actionName = "update";
+        mintLog().name = "update";
+      },
+    ],
+    [
+      "a mint signed by another account",
+      false,
+      () => {
+        mintLog().account = FORGER;
+      },
+    ],
+    [
+      "a mint from another template",
+      false,
+      () => {
+        mintLog().params.templateId = "6c00000000000000000000ff";
+      },
+    ],
+    // A genuine mint, then another update: the opening is at nonce 3.
+    ["an update after a gap", true, () => {}],
+    [
+      "an opening update whose map is forged at the current nonce",
+      false,
+      () => {
+        rewrite = (operation, [status, body]) => {
+          if (operation !== "loyalty.membership.read") return [status, body];
+          const value = body as Record<string, unknown>;
+          const opening = value.opening as Record<string, unknown>;
+          const claimed = {
+            ...(opening.written_custom as object),
+            tierStatus: "Gold",
+          };
+          return [
+            status,
+            {
+              ...value,
+              opening: {
+                ...opening,
+                written_custom: claimed,
+                written_custom_hash: sha(canonicalJson(claimed)),
+              },
+            },
+          ];
+        };
+      },
+    ],
+  ])("is never active for %s", async (_label, between, forge) => {
+    const browser = await bornMember({ between });
+    forge();
+    expect((await membership(browser)).membership).toEqual({
+      status: "unconfirmed",
     });
   });
 });

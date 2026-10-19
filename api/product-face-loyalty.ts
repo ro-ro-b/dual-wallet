@@ -24,6 +24,7 @@ import { loyaltyServedBy } from "@/api/wallet-host";
 import {
   ACTIVITY_TYPE,
   checkCanonical,
+  checkOpeningBirth,
   checkPass,
   checkReceipt,
   lifecycleStatus,
@@ -212,6 +213,26 @@ export async function proveReceipt(
   );
 }
 
+/**
+ * §5 Birth: a `mint` opening is its own birth, read nothing more. An
+ * `update` opening (a two-effect birth) also needs C's first public change
+ * and its action log: the issuer's own mint of C from the bound template.
+ */
+async function proveOpeningBirth(
+  opening: ActionReceipt,
+  canonical: CanonicalRead,
+  proof: ProofContext,
+) {
+  const change =
+    opening.actionName === "update"
+      ? await firstStateChange(canonical.objectId)
+      : undefined;
+  const action = change ? await publicAction(change.actionId) : undefined;
+  return (
+    checkOpeningBirth(opening, canonical, proof, { change, action }) === null
+  );
+}
+
 type Proven =
   | { ok: true; view: LoyaltyMembershipView; canonical?: CanonicalRead }
   | { ok: false; code: "session_expired" };
@@ -239,7 +260,8 @@ async function proveMembership(
   const unconfirmed: Proven = { ok: true, view: { status: "unconfirmed" } };
   if (
     !(await proveCanonical(canonical, proof)) ||
-    !(await proveReceipt(opening, canonical, proof))
+    !(await proveReceipt(opening, canonical, proof)) ||
+    !(await proveOpeningBirth(opening, canonical, proof))
   ) {
     return unconfirmed;
   }

@@ -90,6 +90,9 @@ CanonicalRead   = {   // a FRESH authenticated exact read made for this call
 ActionReceipt   = {   // one Dual action, from the runtime's retained write
   "action_id": string,          // the Dual action-log id
   "action_name": "mint" | "update",
+                                // "update", except create_membership: the mint,
+                                // or the post-mint update of a two-effect
+                                // birth (§5 Birth)
   "semantic": "create_membership" | "submit_activity" | "verify_activity",
   "object_id": Id24,
   "account": Addr,              // signer, from the runtime's fresh action-log read
@@ -160,7 +163,7 @@ never a Dual fact.
   "approval"?:  { "status": "pending" | "approved" | "declined",
                   "decided_at"?: ISO, "accounting": { "dual_writes": 0, "reason": Code } },
   "canonical"?: CanonicalRead,
-  "opening"?:   ActionReceipt,          // semantic create_membership, action_name mint
+  "opening"?:   ActionReceipt,          // semantic create_membership: the mint, or a two-effect birth's update
   "pass"?:      { "object_id": Id24, "template_id": Id24 },
   "accounting": { "dual_writes": 0, "reason": "membership_read" } }
 ```
@@ -235,9 +238,10 @@ wallet id in participant custody: `api/purpose-runtime.mjs:1114-1121`,
 
 1. `written_custom_hash` = sha256(canonical JSON of `written_custom`);
    `object_id` = C's; `account` = `canonicalIssuerAccount`; and
-   `action_name` is `mint` for create_membership, `update` otherwise.
-   Dual records verify as `update`: no public `verify_activity` name is
-   assumed.
+   `action_name` is `update`, except that create_membership may be `mint`
+   (a single-mint opening) or `update` (the post-mint update of a two-effect
+   birth, which must also pass **Birth** below). Dual records verify as
+   `update`: no public `verify_activity` name is assumed.
 2. `written_custom` is the existing Studio write format:
    - `generic_semantic_purpose` = `membership-loyalty-rewards`;
    - `recordId` = C's `custom.recordId` (the immutable application record
@@ -274,6 +278,20 @@ wallet id in participant custody: `api/purpose-runtime.mjs:1114-1121`,
    historical, a submission is current when first proven, and a
    verification is current when counted.
 
+**Birth.** A `mint` opening is its own birth: (1)–(5) prove it and nothing
+more is read. An `update` opening is Studio's two-effect issuer-held birth
+(§8 (6)): the mint, then its post-mint update of the same issuer-owned
+object. It counts only if, in addition to (1)–(5) (an `update`, so the
+state change's `prev_owner` is the issuer too, and `state` = `Member`):
+
+- its `next_nonce` is exactly 2: no other change between the mint and it;
+- C's first public state change
+  (`GET /public/objects/{id}/state-changes?order=asc&limit=1`) is a `mint`
+  of C at `next_nonce` 1 with `current_owner` = the issuer;
+- that change's public action log is that `mint`, its `account` is
+  `canonicalIssuerAccount`, its `affected_objects` names that change of C,
+  and its `params.template_id` is `binding.loyalty.canonicalTemplateId`.
+
 **Active.** C and the opening receipt pass, and the holder's own session
 reads exactly the runtime-named pass: `GET /objects?id=<pass object id>&owner=<holder>&template_id=<passTemplateId>`,
 never an inventory page. The answer must be exactly that object id, owned
@@ -286,7 +304,8 @@ is `unconfirmed` and claims no absence. The pass's custom has:
 - `product_type` = `participant_opening_pass`;
 - `canonical_object_id`, `canonical_template_id`, `canonical_issuer_account`
   and `organization_id` as bound;
-- `opening_action_id` = the opening receipt's `action_id`;
+- `opening_action_id` = the opening receipt's `action_id` (for a two-effect
+  birth, the update's);
 - `openingState` = `Member`.
 
 The pass's own `mint` (its first public state change, then the public action
@@ -409,8 +428,21 @@ Then:
    - `affected_objects[].state_change_id`;
    - public action-log `account` for `update`;
    - the holder session's `listObjects` by pass template.
-6. `opening_action_id` is the Dual action-log id of the canonical mint (the
-   pass snapshot's `canonicalOpeningActionId`).
+6. The opening action. This contract first assumed the opening receipt is
+   a single `mint` whose id the pass names. Studio source says otherwise
+   for a real membership under participant custody: its REST issuer-held
+   birth is two provider writes, a mint (object nonce 1) and then a
+   post-mint update (nonce 2) of the same issuer-owned object
+   (`restPostMintUpdates`, run in the mint attempt's `postMintUpdates`,
+   `src/dual-activation.mjs`). The event's verified proof is at the update
+   (`proof.providerActions` = `[{type: "mint"}, {type: "update"}]`,
+   `proof.actionId` = the update), and the pass binds
+   `opening_action_id` = that `proof.actionId`
+   (`canonicalOpeningActionId`, `src/participant-opening-pass.mjs`), so the
+   update's id. The wallet now handles this (§3, §5 **Birth**) and a
+   single-mint opening is unchanged. Live confirmation is still required:
+   one real birth's action logs and state changes, `params.template_id` on
+   the public mint log, and the opening receipt the runtime returns.
 7. The runtime's idempotency by `operationId` for submit (§4.4,
    `operation_already_received` before every other check), proven by Studio
    tests: the wallet relies on it only past its own same-instance damper.

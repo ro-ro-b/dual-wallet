@@ -1,5 +1,6 @@
 import {
   checkCanonical,
+  checkOpeningBirth,
   checkReceipt,
   isLoyaltyHostOperation,
   parseAccounting,
@@ -415,6 +416,167 @@ describe("the proofs", () => {
       verificationFollows(receipt(), { ...verification, nextNonce: 4 }),
     ).toBe(false);
     expect(verificationFollows(receipt(), receipt())).toBe(false);
+  });
+
+  const openingWire = (overrides: Record<string, unknown> = {}) => ({
+    action_id: "act-0002",
+    action_name: "update",
+    semantic: "create_membership",
+    object_id: canonical.objectId,
+    account: RULES.canonicalIssuerAccount,
+    next_nonce: 2,
+    readback_content_hash: "0xcccccccccccccccccccc",
+    written_custom: { ...custom, state: "Member" },
+    written_custom_hash: HASH,
+    ...overrides,
+  });
+
+  it("an opening is the issuer's mint or its post-mint update; every other receipt is an update", () => {
+    expect(
+      parseActionReceipt(openingWire(), "create_membership")?.actionName,
+    ).toBe("update");
+    expect(
+      parseActionReceipt(
+        openingWire({ action_name: "mint", next_nonce: 1 }),
+        "create_membership",
+      )?.actionName,
+    ).toBe("mint");
+    expect(
+      parseActionReceipt(
+        openingWire({ action_name: "transfer" }),
+        "create_membership",
+      ),
+    ).toBeUndefined();
+    expect(
+      parseActionReceipt(
+        openingWire({ action_name: "mint", semantic: "submit_activity" }),
+        "submit_activity",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("a two-effect birth: the update at nonce 2 after the issuer's own mint of C at 1, from the bound template", () => {
+    const opening = parseActionReceipt(openingWire(), "create_membership")!;
+    const birth = {
+      change: {
+        id: "sc-1",
+        actionId: "act-0001",
+        actionName: "mint",
+        objectId: canonical.objectId,
+        nextNonce: 1,
+        nextContentHash: "0xeeeeeeeeeeeeeeeeeeee",
+        prevOwner: "0x0000000000000000000000000000000000000000",
+        currentOwner: RULES.canonicalIssuerAccount,
+      },
+      action: {
+        id: "act-0001",
+        name: "mint",
+        account: RULES.canonicalIssuerAccount,
+        affected: [
+          {
+            id: canonical.objectId,
+            templateId: RULES.canonicalTemplateId,
+            stateChangeId: "sc-1",
+          },
+        ],
+        to: RULES.canonicalIssuerAccount,
+        templateId: RULES.canonicalTemplateId,
+      },
+    };
+    expect(checkOpeningBirth(opening, canonical, context, birth)).toBeNull();
+    // A mint opening is its own birth: nothing more is needed.
+    const minted = parseActionReceipt(
+      openingWire({ action_name: "mint", next_nonce: 1 }),
+      "create_membership",
+    )!;
+    expect(
+      checkOpeningBirth(minted, canonical, context, {
+        change: undefined,
+        action: undefined,
+      }),
+    ).toBeNull();
+    const refused: Array<
+      [string, ActionReceipt, Parameters<typeof checkOpeningBirth>[3]]
+    > = [
+      ["a gap before the update", { ...opening, nextNonce: 3 }, birth],
+      ["no first change", opening, { ...birth, change: undefined }],
+      [
+        "a first change that is not a mint",
+        opening,
+        { ...birth, change: { ...birth.change, actionName: "update" } },
+      ],
+      [
+        "a first change that is not at nonce 1",
+        opening,
+        { ...birth, change: { ...birth.change, nextNonce: 2 } },
+      ],
+      [
+        "a first change of another object",
+        opening,
+        {
+          ...birth,
+          change: { ...birth.change, objectId: "6c00000000000000000000c9" },
+        },
+      ],
+      [
+        "a mint to another owner",
+        opening,
+        {
+          ...birth,
+          change: {
+            ...birth.change,
+            currentOwner: "0x00000000000000000000000000000000000000f9",
+          },
+        },
+      ],
+      ["no mint action log", opening, { ...birth, action: undefined }],
+      [
+        "a mint signed by another account",
+        opening,
+        {
+          ...birth,
+          action: {
+            ...birth.action,
+            account: "0x00000000000000000000000000000000000000f9",
+          },
+        },
+      ],
+      [
+        "a mint from another template",
+        opening,
+        {
+          ...birth,
+          action: { ...birth.action, templateId: "6c00000000000000000000ff" },
+        },
+      ],
+      [
+        "an action log that is not a mint",
+        opening,
+        { ...birth, action: { ...birth.action, name: "update" } },
+      ],
+      [
+        "a mint that does not name this change of C",
+        opening,
+        {
+          ...birth,
+          action: {
+            ...birth.action,
+            affected: [{ ...birth.action.affected[0], stateChangeId: "sc-9" }],
+          },
+        },
+      ],
+      [
+        "an opening that is not create_membership",
+        { ...opening, semantic: "submit_activity" },
+        birth,
+      ],
+    ];
+    for (const [label, receipt, facts] of refused) {
+      expect([
+        label,
+        checkOpeningBirth(receipt, canonical, context, facts),
+      ]).toEqual([label, "birth_mismatch"]);
+    }
   });
 
   it("evidence is plain, trimmed and bounded", () => {

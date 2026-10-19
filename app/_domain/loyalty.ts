@@ -428,11 +428,17 @@ export function parseActionReceipt(
 ): ActionReceipt | undefined {
   if (!record(value) || value.semantic !== semantic) return undefined;
   const nextNonce = positive(value.next_nonce);
-  const actionName = semantic === "create_membership" ? "mint" : "update";
+  // Every semantic is an update, except the opening: the issuer's mint, or
+  // the post-mint update of a two-effect birth (§3; proven by §5 Birth).
+  const actionName =
+    value.action_name === "update" ||
+    (value.action_name === "mint" && semantic === "create_membership")
+      ? value.action_name
+      : undefined;
   if (
+    !actionName ||
     typeof value.action_id !== "string" ||
     !ACTION_ID.test(value.action_id) ||
-    value.action_name !== actionName ||
     !isObjectId(value.object_id) ||
     typeof value.account !== "string" ||
     !ADDRESS.test(value.account) ||
@@ -721,6 +727,7 @@ export type ProofFailure =
   | "signer_mismatch"
   | "history_mismatch"
   | "pass_mismatch"
+  | "birth_mismatch"
   | "submission_mismatch"
   | "verification_mismatch";
 
@@ -877,6 +884,54 @@ export function checkReceipt(
       lower(change.prevOwner) !== rules.canonicalIssuerAccount)
   ) {
     return "history_mismatch";
+  }
+  return null;
+}
+
+/**
+ * §5 Birth, for an opening checkReceipt already proved. A `mint` opening is
+ * its own birth (nothing more is read). An `update` opening is the post-mint
+ * update of Studio's two-effect issuer-held birth (src/dual-activation.mjs
+ * restPostMintUpdates): exactly the object's second change, whose first
+ * public change is the issuer's own mint of C from the bound template.
+ */
+export function checkOpeningBirth(
+  opening: ActionReceipt,
+  canonical: CanonicalRead,
+  context: ProofContext,
+  birth: {
+    /** C's first public state change (oldest first). */
+    change: PublicStateChangeFacts | undefined;
+    /** The public action log that change names. */
+    action: PublicActionFacts | undefined;
+  },
+): ProofFailure | null {
+  const { rules } = context;
+  if (opening.semantic !== "create_membership") return "birth_mismatch";
+  if (opening.actionName === "mint") return null;
+  const { change, action } = birth;
+  const affected = action?.affected.find(
+    (item) => item.id === canonical.objectId,
+  );
+  if (
+    opening.objectId !== canonical.objectId ||
+    // No change in between: the mint at 1, this update at 2.
+    opening.nextNonce !== 2 ||
+    !change ||
+    change.actionName !== "mint" ||
+    change.nextNonce !== 1 ||
+    change.objectId !== canonical.objectId ||
+    change.actionId === opening.actionId ||
+    lower(change.currentOwner) !== rules.canonicalIssuerAccount ||
+    !action ||
+    action.id !== change.actionId ||
+    action.name !== "mint" ||
+    lower(action.account) !== rules.canonicalIssuerAccount ||
+    action.templateId !== rules.canonicalTemplateId ||
+    !affected ||
+    affected.stateChangeId !== change.id
+  ) {
+    return "birth_mismatch";
   }
   return null;
 }
