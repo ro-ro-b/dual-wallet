@@ -33,6 +33,9 @@
     the final native join/earn wire contract on the existing opening pass and
     issuer-owned canonical membership, the wallet's proof rules (implemented
     in source, fixtures only) and the live release blockers
+  - [Loyalty benefits and redemption, loyalty-benefit-redeem-v1](./proposals/loyalty-benefit-redeem-v1.md):
+    the extension for non-cash benefits, the operator grant, the member's
+    one-time redemption request and the partner's recorded confirmation.
   - [Runtime write outcome, recovery listing and acknowledgement, r20](./proposals/runtime-write-status-r20.md):
     the pinned Studio runtime wire schema the wallet needs to free a journal
     slot from a verified write outcome and to recover unresolved or unseen
