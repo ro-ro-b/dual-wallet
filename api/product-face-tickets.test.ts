@@ -520,6 +520,148 @@ describe("one ticket", () => {
   });
 });
 
+describe("the P4 client ticket as Dual returns it", () => {
+  // Studio's emitted ticket rules and the exact ticket-admission-v1 block,
+  // through the real binding parser.
+  const STUDIO_RULES = {
+    fields: {
+      event: "title",
+      startsAt: "admissionWindowStartsAt",
+      venue: "venueRef",
+      entryClass: "accessClass",
+      entryGuidance: null,
+      issueOperation: "operation_id",
+      state: "state",
+    },
+    states: { pending: [], issued: ["Valid"], ended: ["Cancelled", "Expired"] },
+    admission: {
+      contract: "ticket-admission-v1",
+      action: "update",
+      inputPath: "data.custom",
+      leaves: {
+        state: { enum: ["Admitted"] },
+        admissionStatus: { enum: ["Admitted"] },
+        operation_id: { runtimeIssued: "^op_[0-9a-f]{40}$" },
+        idempotency_key: { runtimeIssued: "^tig:dual-operation:[0-9a-f]{64}$" },
+      },
+      customKeys: [
+        "accessClass",
+        "activation_hash",
+        "admissionStatus",
+        "admissionWindowEndsAt",
+        "admissionWindowStartsAt",
+        "app_namespace",
+        "eventRef",
+        "idempotency_key",
+        "operation_id",
+        "product_type",
+        "recipient_mint_projection",
+        "recordId",
+        "seatRef",
+        "state",
+        "title",
+        "venueRef",
+      ],
+      fromStates: ["Valid"],
+      targetStates: ["Admitted"],
+      preserveUnlisted: true,
+    },
+  };
+  // The 16 closed-template keys, as issued (FICTIONAL ids, the real window bytes).
+  const TICKET_KEYS = {
+    accessClass: "general",
+    activation_hash: `sha256:${"a".repeat(64)}`,
+    admissionStatus: "Valid",
+    admissionWindowEndsAt: "2026-10-20T20:30+11:00",
+    admissionWindowStartsAt: "2026-10-20T17:30+11:00",
+    app_namespace: "f".repeat(24),
+    eventRef: "P4-20261020",
+    idempotency_key: `tig:dual-operation:${"b".repeat(64)}`,
+    operation_id: `op_${"c".repeat(40)}`,
+    product_type: "event ticket",
+    recipient_mint_projection: true,
+    recordId: "tkt-fictional-0001",
+    seatRef: "",
+    state: "Valid",
+    title: "P4 acceptance event",
+    venueRef: "p4-acceptance-venue",
+  };
+  // ...and the issue's own provenance Dual keeps beside them: 42 keys in all,
+  // a nested `custom` among them (it holds no window).
+  const PROVENANCE = {
+    browser_side_dual_writes: false,
+    custom: {
+      activation_type: "ticket",
+      app: "fictional",
+      object_properties: {},
+    },
+    evidence_root: `sha256:${"d".repeat(64)}`,
+    generated_app_id: "fictional-app",
+    generated_app_scope_hash: `sha256:${"e".repeat(64)}`,
+    initial_action: "issue_ticket",
+    initial_state: "Valid",
+    lifecycle_state: "Valid",
+    object_type: "ticket",
+    owner_ref: "holder",
+    passport_id: "tkt-fictional-0001",
+    policy_gates: [],
+    private_evidence_referenced_only: true,
+    product_title: "P4 acceptance event",
+    proof_model_hash: `sha256:${"1".repeat(64)}`,
+    public_fields_only: true,
+    public_writes: false,
+    purpose_contract_hash: `sha256:${"2".repeat(64)}`,
+    purpose_id: "event-ticketing-admission",
+    raw_payload_stored: false,
+    receipt_hash: `sha256:${"3".repeat(64)}`,
+    record_schema_version: "1",
+    schema: "fictional",
+    serial_number: "1",
+    states: [],
+    transitions: [],
+  };
+  const dualObject = (custom: Record<string, unknown>) => ({
+    ...object(),
+    custom,
+  });
+
+  it("reads the full entry window from the closed template's keys, beside the issue's provenance, and states no event start", async () => {
+    configure({ rules: STUDIO_RULES });
+    const custom = { ...TICKET_KEYS, ...PROVENANCE };
+    expect(Object.keys(custom)).toHaveLength(42);
+    getObjectById.mockResolvedValue(dualObject(custom));
+    const { status, body } = await detail(TICKET);
+    expect(status).toBe(200);
+    expect(body.ticket).toMatchObject({
+      status: "issued",
+      event: {
+        title: "P4 acceptance event",
+        startsAt: null,
+        venue: "p4-acceptance-venue",
+      },
+      entryClass: "general",
+      entryWindow: {
+        startsAt: "2026-10-20T17:30+11:00",
+        endsAt: "2026-10-20T20:30+11:00",
+        closed: Date.now() >= Date.UTC(2026, 9, 20, 9, 30),
+      },
+    });
+  });
+
+  it("knows no window end when a closed-template key is missing, whatever else the object carries", async () => {
+    configure({ rules: STUDIO_RULES });
+    const custom: Record<string, unknown> = { ...TICKET_KEYS, ...PROVENANCE };
+    delete custom.seatRef;
+    getObjectById.mockResolvedValue(dualObject(custom));
+    const { body } = await detail(TICKET);
+    expect(body.ticket.entryWindow).toEqual({
+      startsAt: "2026-10-20T17:30+11:00",
+      endsAt: null,
+      closed: false,
+    });
+  });
+});
+
 describe("who serves Tickets", () => {
   it("a branded host that did not enable them refuses before any read", async () => {
     configure({ tickets: false });

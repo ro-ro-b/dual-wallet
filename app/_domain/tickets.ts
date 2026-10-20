@@ -74,9 +74,9 @@ export interface Ticket {
   endedAs: "cancelled" | "expired" | null;
   /**
    * When entry opens and closes, as the issuer wrote them (never the event's
-   * start). For a ticket-admission-v1 binding both come from the exact closed
-   * ticket template (`admissionWindowStartsAt`, `admissionWindowEndsAt`, the
-   * admission leg's own fields); a P4.2 binding that names
+   * start). For a ticket-admission-v1 binding both come from the closed
+   * ticket template's keys (`admissionWindowStartsAt`, `admissionWindowEndsAt`,
+   * the admission leg's own fields); a P4.2 binding that names
    * `admissionWindowStartsAt` gives the opening only, since its rules name no
    * end. `closed` says whether a known end had passed at this read: a derived
    * fact beside the canonical state, which it never changes (a closed window
@@ -276,22 +276,22 @@ function endedAsOf(state: unknown, status: TicketStatus) {
 
 /**
  * The entry window, or null. The admission contract fixes where it is kept:
- * the exact closed ticket template (no more, no fewer keys), its
- * `admissionWindowStartsAt` and `admissionWindowEndsAt`. A P4.2 binding that
- * names `admissionWindowStartsAt` as its start gives the opening only (its
- * rules name no end). A window that ends before it opens is not shown.
+ * the closed ticket template's keys, its `admissionWindowStartsAt` and
+ * `admissionWindowEndsAt`, all present. This is a read: an issuer's own keys
+ * beside them (Dual's object may carry the issue's provenance) do not change
+ * what those keys mean, so they do not hide the window. Every write still
+ * needs exactly the closed template (checkAdmissionProposal). A P4.2 binding
+ * that names `admissionWindowStartsAt` as its start gives the opening only
+ * (its rules name no end). A window that ends before it opens is not shown.
  */
 function entryWindowOf(
   custom: Record<string, unknown>,
   rules: TicketRules,
   now: number,
 ): Ticket["entryWindow"] {
-  const keys = rules.admission ? [...rules.admission.customKeys].sort() : [];
-  const present = Object.keys(custom).sort();
+  const keys = rules.admission?.customKeys ?? [];
   const closedTemplate =
-    keys.length > 0 &&
-    present.length === keys.length &&
-    present.every((key, index) => key === keys[index]);
+    keys.length > 0 && keys.every((key) => Object.hasOwn(custom, key));
   let startsAt: string | null = null;
   let endsAt: string | null = null;
   if (closedTemplate) {

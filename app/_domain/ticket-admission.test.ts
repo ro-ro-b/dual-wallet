@@ -142,6 +142,22 @@ describe("an admission proposal", () => {
     expect(
       checkAdmissionProposal(proposal(admitted()), expected(), fifteen, rules),
     ).toEqual({ ok: false, reason: "admission_unsupported" });
+    // Dual's object for an issue that also wrote its own provenance beside the
+    // 16 keys (the P4 shape) is not the closed template either: never admitted,
+    // whatever the window display reads.
+    expect(
+      checkAdmissionProposal(
+        proposal(admitted()),
+        expected(),
+        {
+          ...fresh(),
+          purpose_id: "event-ticketing-admission",
+          public_writes: false,
+          custom: { activation_type: "ticket" },
+        },
+        rules,
+      ),
+    ).toEqual({ ok: false, reason: "admission_unsupported" });
     expect(
       checkAdmissionProposal(
         proposal(admitted()),

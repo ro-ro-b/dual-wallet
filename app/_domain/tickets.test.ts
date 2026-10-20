@@ -385,10 +385,22 @@ describe("why a verified ticket can't be used", () => {
       event: { startsAt: null },
       entryWindow: opening,
     });
-    // Not exactly the closed template: no verified end.
+    // Every closed-template key present, with the issuer's own keys beside
+    // them: the window is read; a write still needs exactly the template.
     expect(read({ ...closedTemplate("Valid"), extra: "x" })).toMatchObject({
-      entryWindow: opening,
+      entryWindow: {
+        startsAt: "2026-10-19T08:00:00Z",
+        endsAt: "2026-10-19T11:00:00Z",
+        closed: true,
+      },
     });
+    // A closed-template key missing: no verified end.
+    const short: Record<string, unknown> = {
+      ...closedTemplate("Valid"),
+      extra: "x",
+    };
+    delete short.seatRef;
+    expect(read(short)).toMatchObject({ entryWindow: opening });
     const missing: Record<string, unknown> = closedTemplate("Valid");
     delete missing.admissionWindowEndsAt;
     expect(read(missing)).toMatchObject({ entryWindow: opening });
