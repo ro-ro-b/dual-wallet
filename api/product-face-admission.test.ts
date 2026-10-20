@@ -831,6 +831,100 @@ describe("Dual's expanded authenticated view of a ticket (the P4 shape)", () => 
     },
   );
 
+  it.each<[string, Parameters<typeof expanded>[0] | "unreadable", string]>([
+    ["cannot be read", "unreadable", "ticket_record_unavailable"],
+    ["is stale", { published: { nonce: 2 } }, "ticket_record_unavailable"],
+    [
+      "has another leaf",
+      { publishedCustom: (c) => ({ ...c, venueRef: "Elsewhere" }) },
+      "admission_unsupported",
+    ],
+  ])(
+    "after the holder's own execute, a published record that %s keeps the original operation: unknown, read only, never not sent",
+    async (_label, fault, refusal) => {
+      const services = fakeServices();
+      global.fetch = services.fetchImpl as unknown as typeof fetch;
+      expanded();
+      const browser = new Browser();
+      const { operationId, custom } = await begun(browser);
+      expect(
+        (
+          await browser.admission({
+            transition: "confirm",
+            operation_id: operationId,
+          })
+        ).body,
+      ).toEqual({ reservation: "won" });
+      expect((await browser.execute(operationId, custom)).status).toBe(200);
+      expect(services.executions).toBe(1);
+      const sentCalls = services.calls.length;
+
+      // Dual's published record no longer pairs with the authenticated view.
+      if (fault === "unreadable") {
+        getObjectByIdPublic.mockRejectedValue(new Error("connection reset"));
+      } else {
+        expanded(fault);
+      }
+      const verified = await browser.admission({
+        transition: "record_action",
+        operation_id: operationId,
+        action_id: "act-admit-0001",
+      });
+      expect(verified.body.outcome).toEqual({ status: "unknown", operationId });
+      for (const tab of [browser, browser.reopen()]) {
+        expect(await tab.admission({ transition: "check" })).toEqual({
+          status: 200,
+          body: { state: { status: "unknown", operationId } },
+        });
+        expect(
+          await tab.admission({ transition: "begin", request_id: REQUEST_ID }),
+        ).toEqual({ status: 409, body: { code: "admission_in_progress" } });
+        expect(
+          (
+            await tab.admission({
+              transition: "status",
+              operation_id: operationId,
+            })
+          ).body.outcome,
+        ).toEqual({ status: "unknown", operationId });
+      }
+      // Nothing new was proposed, reserved or executed: only reads of the
+      // original operation (one verify, two statuses) reached the runtime.
+      expect(services.calls.slice(sentCalls).map((c) => c.operation)).toEqual([
+        "admission.verify",
+        "admission.status",
+        "admission.status",
+      ]);
+      expect(services.count("admission.propose")).toBe(1);
+      expect(services.count("admission.reserve")).toBe(1);
+      expect(services.executions).toBe(1);
+      expect(seen.some((body) => body.includes(refusal))).toBe(false);
+
+      // The ticket no longer held by this account: no step is disclosed.
+      const held = dual.owner;
+      dual = { ...dual, owner: OTHER };
+      expect(await browser.reopen().admission({ transition: "check" })).toEqual(
+        { status: 404, body: { code: "not_found" } },
+      );
+      dual = { ...dual, owner: held };
+
+      // Once the record pairs again, the same operation's read-only status
+      // proves the entry; nothing is sent again.
+      expanded();
+      const reopened = browser.reopen();
+      expect(
+        (
+          await reopened.admission({
+            transition: "status",
+            operation_id: operationId,
+          })
+        ).body.outcome,
+      ).toEqual(expect.objectContaining({ status: "admitted" }));
+      expect(services.count("admission.reserve")).toBe(1);
+      expect(services.executions).toBe(1);
+    },
+  );
+
   it("reads no published record for the exact closed template, as before", async () => {
     const services = fakeServices();
     global.fetch = services.fetchImpl as unknown as typeof fetch;

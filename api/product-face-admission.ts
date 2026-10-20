@@ -132,6 +132,17 @@ function sentSteps(
   ].filter((entry) => entry.objectId === objectId && sentAdmissionStep(entry));
 }
 
+/**
+ * The holder's own authenticated read held (this session's ticket, of this
+ * binding) and only the canonical record could not be established now
+ * (readTicketWithCustom). Before anything was sent that is the refusal;
+ * once a step was sent, that step and its original operation answer first,
+ * never "nothing was sent".
+ */
+const canonicalRecordRefused = (failure: FaceOperationFailure) =>
+  failure.code === "ticket_record_unavailable" ||
+  failure.code === "admission_unsupported";
+
 export type AdmissionResult<T> = FaceOperationResult<T>;
 
 /**
@@ -147,7 +158,7 @@ export async function checkAdmission(
   const rules = admissionRules(context);
   if (!rules) return fail("capability_not_granted", 403);
   const read = await freshTicket(context, rules, objectId);
-  if (!read.ok) return read;
+  if (!read.ok && !canonicalRecordRefused(read)) return read;
   const [sent] = sentSteps(context, request, objectId).sort(
     (left, right) => right.updatedAt - left.updatedAt,
   );
@@ -157,6 +168,7 @@ export async function checkAdmission(
       state: { status: "unknown", operationId: sent.operationId },
     };
   }
+  if (!read.ok) return read;
   const answer = await call(
     context,
     request,
@@ -230,11 +242,12 @@ export async function beginAdmission(
     return fail("invalid_request", 400);
   }
   const read = await freshTicket(context, rules, objectId);
-  if (!read.ok) return read;
+  if (!read.ok && !canonicalRecordRefused(read)) return read;
   // One attempt per ticket at a time: a sent step is never replaced.
   if (sentSteps(context, request, objectId).length) {
     return fail("admission_in_progress", 409);
   }
+  if (!read.ok) return read;
   let journal = context.journal;
   const pendingRead = await call(
     context,
