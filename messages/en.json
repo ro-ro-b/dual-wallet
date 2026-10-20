@@ -527,6 +527,7 @@
         "admission_request_mismatch": "This entry request is no longer open. Nothing was sent.",
         "proposal_rejected": "This entry request doesn't match your ticket as Dual records it, so it can't be confirmed. Nothing was sent.",
         "admission_unsupported": "Entry can't be confirmed in this wallet for this ticket. Nothing was sent.",
+        "ticket_record_unavailable": "Your ticket couldn't be read from Dual consistently just now, so nothing was sent. Try again in a moment.",
         "admission_in_progress": "An entry for this ticket was already sent. Check its status instead.",
         "capability_not_granted": "Entry isn't available in this wallet.",
         "session_expired": "Your session has ended. Sign in again to continue; nothing new was sent.",

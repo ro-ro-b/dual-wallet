@@ -7,6 +7,7 @@ import {
 import { faceEntryAction } from "@/app/_domain/face-execution";
 import {
   ADMISSION_CUSTOM_KEYS,
+  canonicalAdmissionCustom,
   checkAdmissionProposal,
   freshShowsAdmittedReadback,
   parseAdmissionPending,
@@ -432,5 +433,86 @@ describe("admissionMayHaveWritten", () => {
         },
       }),
     ).toBe(true);
+  });
+});
+
+describe("the admission's canonical custom map", () => {
+  const rules = parseAdmissionRules(BLOCK)!;
+  const facts = (custom: unknown, overrides: Record<string, unknown> = {}) => ({
+    id: "a".repeat(24),
+    templateId: "b".repeat(24),
+    owner: "0x" + "1".repeat(40),
+    nonce: 1,
+    version: 1,
+    stateHash: "s".repeat(64),
+    contentHash: "c".repeat(64),
+    integrityHash: "i".repeat(64),
+    prevIntegrityHash: "",
+    customHash: null as string | null,
+    whenCreated: 1,
+    whenModified: 2,
+    custom,
+    ...overrides,
+  });
+  const expandedMap = () => ({
+    ...fresh(),
+    purpose_id: "event-ticketing-admission",
+    custom: { app: "x" },
+  });
+
+  it("is the authenticated map when it is exactly the closed template, with no other read", () => {
+    expect(canonicalAdmissionCustom(facts(fresh()), undefined, rules)).toEqual({
+      ok: true,
+      custom: fresh(),
+      source: "authenticated",
+    });
+  });
+
+  it("is the published record for an expanded view only when it is provably the same record", () => {
+    expect(
+      canonicalAdmissionCustom(facts(expandedMap()), facts(fresh()), rules),
+    ).toEqual({ ok: true, custom: fresh(), source: "public" });
+    // Case of the owner's and template's hex is not identity.
+    expect(
+      canonicalAdmissionCustom(
+        facts(expandedMap()),
+        facts(fresh(), {
+          owner: "0x" + "1".repeat(40).toUpperCase(),
+          templateId: "B".repeat(24),
+        }),
+        rules,
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("compares every fingerprint exactly as answered, and needs the required ones", () => {
+    for (const changed of [
+      { customHash: "h".repeat(64) },
+      { prevIntegrityHash: "p".repeat(64) },
+      { id: "f".repeat(24) },
+      { whenCreated: 3 },
+    ]) {
+      expect(
+        canonicalAdmissionCustom(
+          facts(expandedMap()),
+          facts(fresh(), changed),
+          rules,
+        ),
+      ).toEqual({ ok: false, reason: "ticket_record_unavailable" });
+    }
+    // An empty required fingerprint proves nothing, even when both agree.
+    expect(
+      canonicalAdmissionCustom(
+        facts(expandedMap(), { stateHash: "" }),
+        facts(fresh(), { stateHash: "" }),
+        rules,
+      ),
+    ).toEqual({ ok: false, reason: "ticket_record_unavailable" });
+    expect(
+      canonicalAdmissionCustom(facts(expandedMap()), undefined, rules),
+    ).toEqual({ ok: false, reason: "ticket_record_unavailable" });
+    expect(
+      canonicalAdmissionCustom(facts(expandedMap()), facts("not a map"), rules),
+    ).toEqual({ ok: false, reason: "admission_unsupported" });
   });
 });

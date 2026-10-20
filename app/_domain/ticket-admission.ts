@@ -467,6 +467,131 @@ export function admissionProposalHashInput(proposal: AdmissionProposal) {
   });
 }
 
+/**
+ * One provider read of an object, as the canonical admission read compares
+ * it: identity, owner, template, nonce, version, every fingerprint and the
+ * custom map exactly as answered (nothing derived, nothing filled in).
+ */
+export interface ObjectRecordFacts {
+  id: string;
+  templateId: string;
+  owner: string;
+  nonce: number;
+  version: number;
+  stateHash: string;
+  contentHash: string;
+  integrityHash: string;
+  prevIntegrityHash: string;
+  /** Null when the provider answered none. */
+  customHash: string | null;
+  whenCreated: number;
+  whenModified: number;
+  custom: unknown;
+}
+
+/** Whether a custom map is exactly the closed ticket template's keys. */
+export function isClosedTicketCustom(
+  custom: unknown,
+  rules: AdmissionRules,
+): custom is Record<string, unknown> {
+  return (
+    record(custom) &&
+    sameJson(Object.keys(custom).sort(), [...rules.customKeys])
+  );
+}
+
+/**
+ * Whether a custom map carries every closed-template key and more (Dual's
+ * authenticated view of an issue that also kept its provenance): the one
+ * shape for which the provider's published record is read.
+ */
+export function isExpandedTicketCustom(
+  custom: unknown,
+  rules: AdmissionRules,
+): boolean {
+  return (
+    record(custom) &&
+    !isClosedTicketCustom(custom, rules) &&
+    rules.customKeys.every((key) => Object.hasOwn(custom, key))
+  );
+}
+
+export type CanonicalAdmissionCustom =
+  | {
+      ok: true;
+      custom: Record<string, unknown>;
+      source: "authenticated" | "public";
+    }
+  | {
+      ok: false;
+      reason: "admission_unsupported" | "ticket_record_unavailable";
+    };
+
+const HASH_FIELDS = [
+  "stateHash",
+  "contentHash",
+  "integrityHash",
+] as const satisfies readonly (keyof ObjectRecordFacts)[];
+
+/**
+ * The custom map an admission is checked and written against. The holder's
+ * authenticated read comes first and has already passed every holder,
+ * organisation and template check. When it is exactly the closed template,
+ * it is the map (no other read). When Dual's authenticated view carries
+ * more than the template (the issue's provenance beside the 16 keys), the
+ * provider's own published record is the map, and only when it proves to be
+ * the same record: exactly the 16 keys, the same id, template, owner, nonce,
+ * version, timestamps and fingerprints (state, content, integrity, previous
+ * integrity, custom when answered), and every one of the 16 leaves deep-equal
+ * to the authenticated read's. Anything else refuses, before any holder
+ * signature or write: a structural difference is `admission_unsupported`, a
+ * missing or disagreeing published record `ticket_record_unavailable`
+ * (nothing was sent; a later read may agree).
+ */
+export function canonicalAdmissionCustom(
+  authenticated: ObjectRecordFacts,
+  published: ObjectRecordFacts | undefined,
+  rules: AdmissionRules,
+): CanonicalAdmissionCustom {
+  const own = authenticated.custom;
+  if (isClosedTicketCustom(own, rules)) {
+    return { ok: true, custom: own, source: "authenticated" };
+  }
+  if (
+    !record(own) ||
+    rules.customKeys.some((key) => !Object.hasOwn(own, key))
+  ) {
+    return { ok: false, reason: "admission_unsupported" };
+  }
+  if (!published) return { ok: false, reason: "ticket_record_unavailable" };
+  if (!isClosedTicketCustom(published.custom, rules)) {
+    return { ok: false, reason: "admission_unsupported" };
+  }
+  const lower = (value: string) => value.toLowerCase();
+  const same =
+    published.id === authenticated.id &&
+    lower(published.templateId) === lower(authenticated.templateId) &&
+    lower(published.owner) === lower(authenticated.owner) &&
+    published.nonce === authenticated.nonce &&
+    published.version === authenticated.version &&
+    published.whenCreated === authenticated.whenCreated &&
+    published.whenModified === authenticated.whenModified &&
+    published.prevIntegrityHash === authenticated.prevIntegrityHash &&
+    published.customHash === authenticated.customHash &&
+    HASH_FIELDS.every(
+      (field) =>
+        typeof authenticated[field] === "string" &&
+        authenticated[field].length > 0 &&
+        published[field] === authenticated[field],
+    );
+  if (!same) return { ok: false, reason: "ticket_record_unavailable" };
+  const raw = published.custom;
+  if (rules.customKeys.some((key) => !sameJson(raw[key], own[key]))) {
+    return { ok: false, reason: "admission_unsupported" };
+  }
+  return { ok: true, custom: raw, source: "public" };
+}
+
 export type AdmissionProposalCheck =
   | { ok: true }
   | {

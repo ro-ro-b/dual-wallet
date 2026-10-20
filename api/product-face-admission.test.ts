@@ -28,9 +28,14 @@ jest.mock("@vercel/oidc", () => ({
 }));
 const getWallet = jest.fn();
 const getObjectById = jest.fn();
+const getObjectByIdPublic = jest.fn();
 jest.mock("@/api/web-sdk-client", () => ({
   getWalletsApi: () => ({ getWallet, logout: jest.fn() }),
-  getObjectsApi: () => ({ getObjectById, listObjects: jest.fn() }),
+  getObjectsApi: () => ({
+    getObjectById,
+    getObjectByIdPublic,
+    listObjects: jest.fn(),
+  }),
 }));
 
 import { establishSessionState } from "@/api/server-session";
@@ -563,6 +568,10 @@ beforeEach(() => {
       whenModified: new Date("2026-10-01T00:00:00Z"),
     }));
 });
+beforeEach(() => {
+  // The published record is read only for an expanded authenticated view.
+  getObjectByIdPublic.mockReset().mockRejectedValue(new Error("not expected"));
+});
 afterEach(() => {
   global.fetch = original;
   delete process.env.FACE_ASSERTION_KEY_ID;
@@ -589,6 +598,246 @@ async function begun(browser: Browser) {
     custom: begin.body.custom as Record<string, unknown>,
   };
 }
+
+describe("Dual's expanded authenticated view of a ticket (the P4 shape)", () => {
+  // One record's identity and fingerprints, the same in both reads (FICTIONAL).
+  const IDENTITY = {
+    nonce: 1,
+    version: 1,
+    stateHash: "a".repeat(64),
+    contentHash: "b".repeat(64),
+    integrityHash: "c".repeat(64),
+    prevIntegrityHash: "d".repeat(64),
+    customHash: "e".repeat(64),
+    whenCreated: new Date("2026-09-30T00:00:00Z"),
+    whenModified: new Date("2026-10-01T00:00:00Z"),
+  };
+  // The issue's provenance Dual's authenticated view keeps beside the 16 keys.
+  const PROVENANCE = {
+    browser_side_dual_writes: false,
+    custom: {
+      activation_type: "ticket",
+      app: "fictional",
+      object_properties: {},
+    },
+    evidence_root: `sha256:${"1".repeat(64)}`,
+    generated_app_id: "fictional-app",
+    generated_app_scope_hash: `sha256:${"2".repeat(64)}`,
+    initial_action: "issue_ticket",
+    initial_state: "Valid",
+    lifecycle_state: "Valid",
+    object_type: "ticket",
+    owner_ref: "holder",
+    passport_id: "tkt-harbour-0001",
+    policy_gates: [],
+    private_evidence_referenced_only: true,
+    product_title: "Harbour Night",
+    proof_model_hash: `sha256:${"3".repeat(64)}`,
+    public_fields_only: true,
+    public_writes: false,
+    purpose_contract_hash: `sha256:${"4".repeat(64)}`,
+    purpose_id: "event-ticketing-admission",
+    raw_payload_stored: false,
+    receipt_hash: `sha256:${"5".repeat(64)}`,
+    record_schema_version: "1",
+    schema: "fictional",
+    serial_number: "1",
+    states: [],
+    transitions: [],
+  };
+  // The authenticated read: the record's 16 keys plus the provenance (42).
+  // The published record: exactly the 16 keys, the same identity.
+  function expanded({
+    published = {} as Record<string, unknown>,
+    publishedCustom = (custom: Record<string, unknown>) => custom,
+    authenticatedCustom = (custom: Record<string, unknown>) => custom,
+  } = {}) {
+    getObjectById.mockImplementation(
+      async ({ objectId }: { objectId: string }) => ({
+        ...dual,
+        ...IDENTITY,
+        id: objectId,
+        custom: authenticatedCustom({
+          ...structuredClone(dual.custom),
+          ...structuredClone(PROVENANCE),
+        }),
+        metadata: { name: "Harbour Night entry" },
+      }),
+    );
+    getObjectByIdPublic.mockImplementation(
+      async ({ objectId }: { objectId: string }) => ({
+        id: objectId,
+        templateId: dual.templateId,
+        owner: dual.owner,
+        metadata: { name: "Harbour Night entry" },
+        ...IDENTITY,
+        custom: publishedCustom(structuredClone(dual.custom)),
+        ...published,
+      }),
+    );
+  }
+
+  it("admits against the provider's published 16-key record when it is provably the same record", async () => {
+    const services = fakeServices();
+    global.fetch = services.fetchImpl as unknown as typeof fetch;
+    expanded();
+    const authenticated = await getObjectById({ objectId: TICKET });
+    expect(Object.keys(authenticated.custom)).toHaveLength(42);
+    const browser = new Browser();
+    const { operationId, custom } = await begun(browser);
+    // The map the holder signs is the record's own 16 keys, four leaves changed.
+    expect(Object.keys(custom).sort()).toEqual(
+      Object.keys(issuedCustom()).sort(),
+    );
+    expect(getObjectByIdPublic).toHaveBeenCalled();
+    expect(
+      (
+        await browser.admission({
+          transition: "confirm",
+          operation_id: operationId,
+        })
+      ).body,
+    ).toEqual({ reservation: "won" });
+    expect((await browser.execute(operationId, custom)).status).toBe(200);
+    expect(services.executions).toBe(1);
+    const verified = await browser.admission({
+      transition: "record_action",
+      operation_id: operationId,
+      action_id: "act-admit-0001",
+    });
+    expect(verified.body.outcome).toEqual(
+      expect.objectContaining({ status: "admitted" }),
+    );
+  });
+
+  it.each<[string, Parameters<typeof expanded>[0], number, string]>([
+    [
+      "the published record cannot be read",
+      { published: {} },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another nonce (a stale read)",
+      { published: { nonce: 2 } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another version",
+      { published: { version: 2 } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another state hash",
+      { published: { stateHash: "f".repeat(64) } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another content hash",
+      { published: { contentHash: "f".repeat(64) } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another integrity hash",
+      { published: { integrityHash: "f".repeat(64) } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another previous integrity hash",
+      { published: { prevIntegrityHash: "f".repeat(64) } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "no custom hash where the authenticated read has one",
+      { published: { customHash: undefined } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another modification time",
+      { published: { whenModified: new Date("2026-10-02T00:00:00Z") } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another owner",
+      { published: { owner: "0x" + "9".repeat(40) } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "another template",
+      { published: { templateId: "f".repeat(24) } },
+      503,
+      "ticket_record_unavailable",
+    ],
+    [
+      "an extra published key",
+      { publishedCustom: (c) => ({ ...c, extra: "x" }) },
+      409,
+      "admission_unsupported",
+    ],
+    [
+      "a missing published key",
+      { publishedCustom: ({ seatRef, ...c }) => (void seatRef, c) },
+      409,
+      "admission_unsupported",
+    ],
+    [
+      "a changed published leaf",
+      { publishedCustom: (c) => ({ ...c, venueRef: "Elsewhere" }) },
+      409,
+      "admission_unsupported",
+    ],
+    [
+      "a changed governed leaf",
+      { publishedCustom: (c) => ({ ...c, state: "Admitted" }) },
+      409,
+      "admission_unsupported",
+    ],
+    [
+      "an authenticated view without a contract key",
+      { authenticatedCustom: ({ seatRef, ...c }) => (void seatRef, c) },
+      409,
+      "admission_unsupported",
+    ],
+  ])(
+    "refuses before any runtime call or write when %s",
+    async (_label, setup, status, code) => {
+      const services = fakeServices();
+      global.fetch = services.fetchImpl as unknown as typeof fetch;
+      expanded(setup);
+      if (_label === "the published record cannot be read") {
+        getObjectByIdPublic.mockRejectedValue(new Error("connection reset"));
+      }
+      const browser = new Browser();
+      for (const step of [
+        { transition: "check" },
+        { transition: "begin", request_id: REQUEST_ID },
+      ]) {
+        expect(await browser.admission(step)).toEqual({
+          status,
+          body: { code },
+        });
+      }
+      expect(services.calls).toEqual([]);
+      expect(services.executions).toBe(0);
+    },
+  );
+
+  it("reads no published record for the exact closed template, as before", async () => {
+    const services = fakeServices();
+    global.fetch = services.fetchImpl as unknown as typeof fetch;
+    await begun(new Browser());
+    expect(getObjectByIdPublic).not.toHaveBeenCalled();
+  });
+});
 
 describe("an authorised holder admits their own ticket", () => {
   it("confirms natively, signs exactly once, and sees entry only after verified readback", async () => {

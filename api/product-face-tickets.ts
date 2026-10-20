@@ -3,7 +3,13 @@ import "server-only";
 import type { FaceRequestContext } from "@/api/product-face-server";
 import { ResponseError } from "@/api/web-sdk/runtime";
 import { getObjectsApi } from "@/api/web-sdk-client";
-import { toTicketSource } from "@/app/_adapters/tickets";
+import { toObjectRecordFacts, toTicketSource } from "@/app/_adapters/tickets";
+import type { SmartObject } from "@/api/web-sdk/models/SmartObject";
+import {
+  canonicalAdmissionCustom,
+  isClosedTicketCustom,
+  isExpandedTicketCustom,
+} from "@/app/_domain/ticket-admission";
 import {
   decodeTicketCursor,
   encodeTicketCursor,
@@ -25,6 +31,10 @@ class UpstreamPagingError extends Error {}
 
 export type TicketReadFailure =
   TicketRefusal | "invalid_request" | "not_found" | "session_expired";
+
+/** Why the admission's canonical read refused (nothing was sent). */
+export type CanonicalReadFailure =
+  "admission_unsupported" | "ticket_record_unavailable";
 
 export type TicketListResult =
   | { ok: true; page: TicketPage }
@@ -149,13 +159,66 @@ export async function readTicket(
   rules: TicketRules,
   objectId: string,
 ): Promise<TicketReadResult> {
-  const result = await readTicketWithCustom(context, rules, objectId);
+  const result = await readTicketObject(context, rules, objectId);
   return result.ok ? { ok: true, ticket: result.ticket } : result;
 }
 
+/** The holder's authenticated read and the ticket every check made of it. */
+async function readTicketObject(
+  context: FaceRequestContext,
+  rules: TicketRules,
+  objectId: string,
+): Promise<
+  | { ok: true; ticket: Ticket; object: SmartObject }
+  | { ok: false; code: TicketReadFailure }
+> {
+  let object: SmartObject;
+  try {
+    object = await getObjectsApi(context.state.accessToken).getObjectById(
+      { objectId },
+      { cache: "no-store" },
+    );
+  } catch (error) {
+    const code = status(error);
+    if (code === 401) return { ok: false, code: "session_expired" };
+    if (code === 403 || code === 404) return { ok: false, code: "not_found" };
+    throw error;
+  }
+  const source = toTicketSource(object);
+  if (source.objectId !== objectId) return { ok: false, code: "not_found" };
+  const evaluated = evaluateTicket(source, evaluation(context, rules));
+  return evaluated.ok
+    ? { ok: true, ticket: evaluated.ticket, object }
+    : { ok: false, code: evaluated.refusal };
+}
+
 /**
- * The ticket and the object's own custom map from the same fresh read
- * (P4.3: an admission proposal is checked against exactly this map).
+ * The provider's own published record of an object (no credential), or
+ * undefined when it cannot be read.
+ */
+async function publishedRecord(objectId: string) {
+  try {
+    return toObjectRecordFacts(
+      await getObjectsApi().getObjectByIdPublic(
+        { objectId },
+        { cache: "no-store" },
+      ),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The ticket and the custom map an admission is checked and written
+ * against, from the same fresh read (P4.3). The holder's authenticated read
+ * comes first and every holder, organisation and template check is made on
+ * it. Its own map is the admission's when it is exactly the closed template.
+ * When Dual's authenticated view carries more (the issue's provenance beside
+ * the 16 keys), the provider's published record is read and used only when
+ * it is provably the same record with exactly the 16 keys
+ * (canonicalAdmissionCustom); otherwise the admission refuses here, before
+ * any proposal, signature or write.
  */
 export async function readTicketWithCustom(
   context: FaceRequestContext,
@@ -163,26 +226,24 @@ export async function readTicketWithCustom(
   objectId: string,
 ): Promise<
   | { ok: true; ticket: Ticket; custom: unknown }
-  | { ok: false; code: TicketReadFailure }
+  | { ok: false; code: TicketReadFailure | CanonicalReadFailure }
 > {
-  let source;
-  let custom: unknown;
-  try {
-    const object = await getObjectsApi(context.state.accessToken).getObjectById(
-      { objectId },
-      { cache: "no-store" },
-    );
-    custom = object.custom;
-    source = toTicketSource(object);
-  } catch (error) {
-    const code = status(error);
-    if (code === 401) return { ok: false, code: "session_expired" };
-    if (code === 403 || code === 404) return { ok: false, code: "not_found" };
-    throw error;
+  const read = await readTicketObject(context, rules, objectId);
+  if (!read.ok) return read;
+  const { admission } = rules;
+  if (!admission || isClosedTicketCustom(read.object.custom, admission)) {
+    return { ok: true, ticket: read.ticket, custom: read.object.custom };
   }
-  if (source.objectId !== objectId) return { ok: false, code: "not_found" };
-  const evaluated = evaluateTicket(source, evaluation(context, rules));
-  return evaluated.ok
-    ? { ok: true, ticket: evaluated.ticket, custom }
-    : { ok: false, code: evaluated.refusal };
+  // Not even every closed-template key: nothing else is read.
+  if (!isExpandedTicketCustom(read.object.custom, admission)) {
+    return { ok: false, code: "admission_unsupported" };
+  }
+  const canonical = canonicalAdmissionCustom(
+    toObjectRecordFacts(read.object),
+    await publishedRecord(objectId),
+    admission,
+  );
+  return canonical.ok
+    ? { ok: true, ticket: read.ticket, custom: canonical.custom }
+    : { ok: false, code: canonical.reason };
 }

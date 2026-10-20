@@ -79,6 +79,13 @@ async function freshTicket(
   const read = await readTicketWithCustom(context, rules, objectId);
   if (read.ok) return { ok: true, fresh: read };
   if (read.code === "session_expired") return fail("session_expired", 401);
+  // The canonical read refused before any proposal, signature or write.
+  if (read.code === "admission_unsupported") {
+    return fail("admission_unsupported", 409);
+  }
+  if (read.code === "ticket_record_unavailable") {
+    return fail("ticket_record_unavailable", 503);
+  }
   // Another holder's, client's or programme's ticket: the same not_found.
   return fail("not_found", 404);
 }

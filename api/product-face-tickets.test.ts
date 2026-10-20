@@ -25,9 +25,10 @@ import {
 const getWallet = jest.fn();
 const getObjectById = jest.fn();
 const listObjects = jest.fn();
+const getObjectByIdPublic = jest.fn();
 jest.mock("@/api/web-sdk-client", () => ({
   getWalletsApi: () => ({ getWallet, logout: jest.fn() }),
-  getObjectsApi: () => ({ getObjectById, listObjects }),
+  getObjectsApi: () => ({ getObjectById, getObjectByIdPublic, listObjects }),
 }));
 
 import { establishSessionState } from "@/api/server-session";
@@ -630,8 +631,11 @@ describe("the P4 client ticket as Dual returns it", () => {
     const custom = { ...TICKET_KEYS, ...PROVENANCE };
     expect(Object.keys(custom)).toHaveLength(42);
     getObjectById.mockResolvedValue(dualObject(custom));
+    getObjectByIdPublic.mockReset();
     const { status, body } = await detail(TICKET);
     expect(status).toBe(200);
+    // Display reads only the holder's authenticated view.
+    expect(getObjectByIdPublic).not.toHaveBeenCalled();
     expect(body.ticket).toMatchObject({
       status: "issued",
       event: {

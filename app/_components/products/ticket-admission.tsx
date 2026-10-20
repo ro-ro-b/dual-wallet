@@ -57,6 +57,7 @@ const FAILURES = [
   "admission_request_mismatch",
   "proposal_rejected",
   "admission_unsupported",
+  "ticket_record_unavailable",
   "admission_in_progress",
   "capability_not_granted",
   "session_expired",
