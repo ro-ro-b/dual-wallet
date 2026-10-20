@@ -8,6 +8,7 @@ import {
   evaluateTicket,
   parseTicket,
   parseTicketPage,
+  ticketInstant,
   ticketText,
   ticketWallClock,
   type TicketRules,
@@ -596,6 +597,23 @@ describe("the issued ticket's own schedule", () => {
     ]) {
       expect(ticketWallClock(value)).toBeNull();
     }
+  });
+
+  it("computes a ticket time's instant from its own parts and offset, without a platform date parser", () => {
+    expect(ticketInstant("2026-10-20T17:30+11:00")).toBe(
+      Date.UTC(2026, 9, 20, 6, 30),
+    );
+    expect(ticketInstant("2026-10-20T20:30+11:00")).toBe(
+      Date.UTC(2026, 9, 20, 9, 30),
+    );
+    expect(ticketInstant("2026-10-19T23:30-07:00")).toBe(
+      Date.UTC(2026, 9, 20, 6, 30),
+    );
+    expect(ticketInstant("2026-10-20T06:30:15.25Z")).toBe(
+      Date.UTC(2026, 9, 20, 6, 30, 15, 250),
+    );
+    expect(ticketInstant("2026-10-20T17:30")).toBeNull();
+    expect(ticketInstant(null)).toBeNull();
   });
 
   it("is honest about a missing or malformed window: each missing side is unstated, never guessed", () => {

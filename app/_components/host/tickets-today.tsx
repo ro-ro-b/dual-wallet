@@ -12,9 +12,10 @@ import {
   TicketStatusBadge,
 } from "@/app/_components/products/tickets-view";
 import { newFaceLaunchId } from "@/app/_domain/product-face";
-import type { Ticket } from "@/app/_domain/tickets";
+import { ticketInstant, type Ticket } from "@/app/_domain/tickets";
 import {
   calendarDay,
+  ticketDate,
   ticketsToday,
   untilNextDayCheck,
 } from "@/app/_domain/tickets-today";
@@ -78,17 +79,23 @@ function TicketLine({
 }) {
   const t = useTranslations("tickets");
   const format = useFormatter();
-  const when = ticket.event.startsAt
-    ? format.dateTime(new Date(ticket.event.startsAt), {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        timeZoneName: "short",
-        timeZone,
-      })
-    : null;
+  // The event's start, else when entry opens, said as that: an entry window is
+  // never shown as the event's start.
+  const dated = ticketInstant(ticketDate(ticket));
+  const time =
+    dated === null
+      ? null
+      : format.dateTime(new Date(dated), {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          timeZoneName: "short",
+          timeZone,
+        });
+  const when =
+    time === null || ticket.event.startsAt ? time : t("entryOpensAt", { time });
   return (
     <li>
       {/* The link's name is its visible content: event, time and status.

@@ -122,9 +122,10 @@ const MAX_TEXT = 500;
 // An instant exactly as the issuer wrote it: a full date, hours and minutes
 // (Studio's canonical form, 2026-10-20T17:30+11:00), optional seconds and
 // fraction, and an explicit offset. Nothing is coerced: no local time, no
-// missing offset, and every part must be in range (see ticketWallClock).
+// missing offset, and every part must be in range (see parseTicketTime). The
+// instant is computed from these parts, never by a platform date parser.
 const ISO_TIME =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|([+-])(\d{2}):(\d{2}))$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|([+-])(\d{2}):(\d{2}))$/;
 
 // The closed ticket template's entry window. By contract these are when entry
 // opens and closes, never the event's start: a binding that names one of them
@@ -169,19 +170,27 @@ export interface TicketWallClock {
   offset: string;
 }
 
+interface ParsedTicketTime extends TicketWallClock {
+  second: number;
+  millisecond: number;
+  /** The offset east of UTC, in minutes. */
+  offsetMinutes: number;
+}
+
 /**
- * The wall clock of a ticket time, or null when the value is not one: the
- * strict form above with every part in range (a real calendar day, 00:00 to
- * 23:59, an offset within +/-14:00).
+ * A ticket time's parts, or null when the value is not one: the strict form
+ * above with every part in range (a real calendar day, 00:00 to 23:59, an
+ * offset within +/-14:00).
  */
-export function ticketWallClock(value: unknown): TicketWallClock | null {
+function parseTicketTime(value: unknown): ParsedTicketTime | null {
   if (typeof value !== "string") return null;
   const match = ISO_TIME.exec(value);
   if (!match) return null;
   const [year, month, day, hour, minute] = match.slice(1, 6).map(Number);
   const second = match[6] === undefined ? 0 : Number(match[6]);
-  const offsetHours = match[8] ? Number(match[9]) : 0;
-  const offsetMinutes = match[8] ? Number(match[10]) : 0;
+  const millisecond = Number((match[7] ?? "0").padEnd(3, "0").slice(0, 3));
+  const offsetHours = match[9] ? Number(match[10]) : 0;
+  const offsetPart = match[9] ? Number(match[11]) : 0;
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   if (
     month < 1 ||
@@ -191,17 +200,46 @@ export function ticketWallClock(value: unknown): TicketWallClock | null {
     hour > 23 ||
     minute > 59 ||
     second > 59 ||
-    offsetMinutes > 59 ||
-    offsetHours * 60 + offsetMinutes > 14 * 60 ||
-    !Number.isFinite(Date.parse(value))
+    offsetPart > 59 ||
+    offsetHours * 60 + offsetPart > 14 * 60
   ) {
     return null;
   }
-  return { year, month, day, hour, minute, offset: match[7] };
+  const sign = match[9] === "-" ? -1 : 1;
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    millisecond,
+    offset: match[8],
+    offsetMinutes: sign * (offsetHours * 60 + offsetPart),
+  };
+}
+
+/** The wall clock of a ticket time, in its own stated offset, or null. */
+export function ticketWallClock(value: unknown): TicketWallClock | null {
+  const parsed = parseTicketTime(value);
+  if (!parsed) return null;
+  const { year, month, day, hour, minute, offset } = parsed;
+  return { year, month, day, hour, minute, offset };
+}
+
+/** The instant a ticket time names (ms since the epoch), or null. */
+export function ticketInstant(value: unknown): number | null {
+  const parsed = parseTicketTime(value);
+  if (!parsed) return null;
+  const { year, month, day, hour, minute, second, millisecond } = parsed;
+  return (
+    Date.UTC(year, month - 1, day, hour, minute, second, millisecond) -
+    parsed.offsetMinutes * 60_000
+  );
 }
 
 function ticketTime(value: unknown): string | null {
-  return ticketWallClock(value) ? (value as string) : null;
+  return parseTicketTime(value) ? (value as string) : null;
 }
 
 function statusOf(
@@ -263,14 +301,10 @@ function entryWindowOf(
     startsAt = ticketTime(valueAt(custom, "admissionWindowStartsAt"));
   }
   if (startsAt === null && endsAt === null) return null;
-  if (startsAt && endsAt && Date.parse(endsAt) <= Date.parse(startsAt)) {
-    return null;
-  }
-  return {
-    startsAt,
-    endsAt,
-    closed: endsAt !== null && Date.parse(endsAt) <= now,
-  };
+  const opens = ticketInstant(startsAt);
+  const closes = ticketInstant(endsAt);
+  if (opens !== null && closes !== null && closes <= opens) return null;
+  return { startsAt, endsAt, closed: closes !== null && closes <= now };
 }
 
 /**

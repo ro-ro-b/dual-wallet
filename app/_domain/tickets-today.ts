@@ -3,10 +3,19 @@
 // It reads only the tickets already listed (the first Tickets page), so it
 // never claims a global nearest, count or completeness: `partial` says when
 // more tickets may exist. "Today" is the viewer's own calendar day in an
-// explicit IANA time zone, the same zone the home displays times in. A
-// missing or past start time is not shown here and claims nothing (not ended,
-// not expired, not ineligible): those tickets stay in the full list.
-import type { Ticket } from "@/app/_domain/tickets";
+// explicit IANA time zone, the same zone the home displays times in. A ticket
+// is dated by its event's start, else by when its entry window opens (shown as
+// that, never as the event's start). An undated or past ticket is not shown
+// here and claims nothing (not ended, not expired, not ineligible): those
+// tickets stay in the full list.
+import { ticketInstant, type Ticket } from "@/app/_domain/tickets";
+
+/** What dates a ticket on the home: its event start, else its entry opening. */
+export function ticketDate(ticket: Ticket): string | null {
+  return ticket.event.startsAt ?? ticket.entryWindow?.startsAt ?? null;
+}
+
+const instantOf = (ticket: Ticket) => ticketInstant(ticketDate(ticket))!;
 
 export interface TicketsToday {
   /** Starting on the viewer's calendar day, earliest first. */
@@ -71,17 +80,16 @@ export function untilNextDayCheck(now: Date, timeZone: string): number {
 }
 
 const byStart = (a: Ticket, b: Ticket) =>
-  Date.parse(a.event.startsAt!) - Date.parse(b.event.startsAt!) ||
-  a.objectId.localeCompare(b.objectId);
+  instantOf(a) - instantOf(b) || a.objectId.localeCompare(b.objectId);
 
 export function ticketsToday(
   tickets: readonly Ticket[],
   { now, timeZone, partial }: { now: Date; timeZone: string; partial: boolean },
 ): TicketsToday {
   const todayKey = calendarDay(now, timeZone);
-  const dated = tickets.filter((ticket) => ticket.event.startsAt !== null);
+  const dated = tickets.filter((ticket) => ticketDate(ticket) !== null);
   const dayOf = (ticket: Ticket) =>
-    calendarDay(new Date(ticket.event.startsAt!), timeZone);
+    calendarDay(new Date(instantOf(ticket)), timeZone);
   const today = dated.filter((ticket) => dayOf(ticket) === todayKey);
   const comingUp = dated
     .filter((ticket) => dayOf(ticket) > todayKey)

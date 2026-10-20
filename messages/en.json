@@ -448,6 +448,7 @@
     "eventStarts": "Event starts",
     "entryOpens": "Entry opens",
     "entryCloses": "Entry closes",
+    "entryOpensAt": "Entry opens {time}",
     "timeInZone": "{time} (UTC{offset})",
     "where": "Where",
     "entryClass": "Ticket class",

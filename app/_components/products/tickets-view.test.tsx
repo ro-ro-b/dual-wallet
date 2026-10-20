@@ -635,6 +635,40 @@ describe("why a verified ticket can't be used", () => {
     ).toBeTruthy();
   });
 
+  it("the list dates a ticket with no event start by when its entry opens, and keeps an event start as it is", async () => {
+    fetchMock.mockImplementation(() =>
+      json({
+        tickets: [
+          wire({
+            event: { title: "Harbour Night", startsAt: null, venue: null },
+            entryWindow: {
+              startsAt: "2026-10-20T17:30+11:00",
+              endsAt: "2026-10-20T20:30+11:00",
+              closed: false,
+            },
+          }),
+          wire({ objectId: "d".repeat(24) }),
+        ],
+        next: null,
+      }),
+    );
+    view();
+    const [opening, explicit] = await screen.findAllByRole("link", {
+      name: /Harbour Night/,
+    });
+    expect(
+      within(opening).getByText(
+        "Entry opens formatted:2026-10-20T17:30:00.000Z [UTC] (UTC+11:00)",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(explicit).getByText(
+        "formatted:2026-11-20T19:30:00.000Z [UTC] (UTC)",
+      ),
+    ).toBeTruthy();
+    expect(within(explicit).queryByText(/Entry opens/)).toBeNull();
+  });
+
   it("the list names the end state and the closed window too", async () => {
     fetchMock.mockImplementation(() =>
       json({

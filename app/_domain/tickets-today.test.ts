@@ -80,6 +80,30 @@ describe("ticketsToday", () => {
     expect(view.attention).toEqual([]);
   });
 
+  it("dates a ticket by its event start, else by when its entry window opens", () => {
+    const window = (startsAt: string | null) => ({
+      startsAt,
+      endsAt: null,
+      closed: false,
+    });
+    // 22:30 at +11:00 is 11:30 UTC: today in Sydney.
+    const opening = ticket({ entryWindow: window("2026-10-18T22:30+11:00") });
+    // The event's own start wins over its window.
+    const both = ticket({
+      startsAt: "2026-10-20T08:00:00Z",
+      entryWindow: window("2026-10-18T22:30+11:00"),
+    });
+    const undated = ticket({ entryWindow: window(null) });
+    const view = ticketsToday([undated, both, opening], {
+      now: NOW,
+      timeZone: "Australia/Sydney",
+      partial: false,
+    });
+    expect(view.today).toEqual([opening]);
+    expect(view.comingUp).toEqual([both]);
+    expect([...view.today, ...view.comingUp]).not.toContain(undated);
+  });
+
   it("lists Coming up earliest first, bounded, from the tickets read only", () => {
     const days = ["2026-10-25", "2026-10-20", "2026-11-02", "2026-10-21"];
     const tickets = days.map((day) => ticket({ startsAt: `${day}T09:00:00Z` }));

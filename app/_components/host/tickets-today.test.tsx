@@ -162,6 +162,35 @@ describe("the signed-in home's tickets", () => {
     ]);
   });
 
+  it("dates a ticket with no event start by when its entry opens, and says so", async () => {
+    ticketReplies = [
+      {
+        status: 200,
+        body: {
+          tickets: [
+            // The P4 shape: no event start; entry opens 22:30 at +11:00
+            // (11:30 UTC), today in Sydney.
+            wire("5", {
+              entryWindow: {
+                startsAt: "2026-10-18T22:30+11:00",
+                endsAt: "2026-10-19T01:30+11:00",
+                closed: false,
+              },
+            }),
+          ],
+          next: null,
+        },
+      },
+    ];
+    view();
+    const today = await screen.findByRole("region", { name: "Today" });
+    const link = within(today).getByRole("link");
+    expect(link.getAttribute("href")).toBe(`${LIST}/${"5".repeat(24)}`);
+    expect(link.textContent).toContain(
+      `Entry opens 2026-10-18T11:30:00.000Z in ${ZONE}`,
+    );
+  });
+
   it("names a dated ticket's exact end state, and a closed entry window apart from its issued state", async () => {
     ticketReplies = [
       {

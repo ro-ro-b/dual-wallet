@@ -107,7 +107,13 @@ function TicketsFailure({
 
 function TicketCard({ slug, ticket }: { slug: string; ticket: Ticket }) {
   const t = useTranslations("tickets");
-  const startsAt = useTicketTime()(ticket.event.startsAt);
+  const time = useTicketTime();
+  // The event's start, else when entry opens, said as that (never as the
+  // event's start), as on the home.
+  const eventStart = time(ticket.event.startsAt);
+  const opening = time(ticket.entryWindow?.startsAt ?? null);
+  const startsAt =
+    eventStart ?? (opening ? t("entryOpensAt", { time: opening }) : null);
   return (
     <li>
       <Link
