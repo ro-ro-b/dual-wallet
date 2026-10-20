@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Ticket as TicketIcon } from "lucide-react";
-import { useFormatter, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { Alert } from "@/app/_components/design-system/alert";
 import { Button, buttonClass } from "@/app/_components/design-system/button";
 import { EmptyState } from "@/app/_components/design-system/empty-state";
@@ -22,6 +22,7 @@ import {
 } from "@/app/_hooks/use-tickets";
 import { useSession } from "@/app/_providers/session-provider";
 import { TicketAdmission } from "@/app/_components/products/ticket-admission";
+import { useTicketTime } from "@/app/_components/products/ticket-time";
 import { TicketsError } from "@/app/_services/tickets.client";
 
 /**
@@ -65,24 +66,6 @@ export function TicketStatusBadge({
 export const entryWindowClosed = (ticket: Ticket) =>
   ticket.status === "issued" && ticket.entryWindow?.closed === true;
 
-function useStartsAt() {
-  const format = useFormatter();
-  return (value: string | null) =>
-    value
-      ? // The zone is named: dateStyle/timeStyle cannot, and an event time with
-        // no zone is ambiguous to someone travelling to it.
-        format.dateTime(new Date(value), {
-          weekday: "long",
-          year: "numeric",
-          month: "long",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-          timeZoneName: "short",
-        })
-      : null;
-}
-
 /** What a failed read means for the holder, and what they can do next. */
 function TicketsFailure({
   error,
@@ -124,7 +107,7 @@ function TicketsFailure({
 
 function TicketCard({ slug, ticket }: { slug: string; ticket: Ticket }) {
   const t = useTranslations("tickets");
-  const startsAt = useStartsAt()(ticket.event.startsAt);
+  const startsAt = useTicketTime()(ticket.event.startsAt);
   return (
     <li>
       <Link
@@ -289,7 +272,7 @@ function TicketDetail({
   // When the gate last verified this entry. The header says so only once a
   // Dual read made after that agrees; Dual's own state alone never does.
   const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
-  const startsAt = useStartsAt();
+  const startsAt = useTicketTime();
   function onOutcome(state: AdmissionState) {
     if (state.status === "admitted") setVerifiedAt(Date.now());
     if (admissionMayHaveWritten(state)) void refresh();
@@ -338,10 +321,27 @@ function TicketDetail({
       <section className="card ticket-detail" aria-labelledby="ticket-facts">
         <h2 id="ticket-facts">{t("factsTitle")}</h2>
         <dl className="ticket-facts">
+          {/* The event's own start, only when the ticket states one. An
+              entry window is never shown as it: it is when entry opens and
+              closes, below. */}
           <div>
-            <dt>{t("when")}</dt>
+            <dt>{t("eventStarts")}</dt>
             <dd>{when ?? t("notStated")}</dd>
           </div>
+          {ticket.entryWindow ? (
+            <>
+              <div>
+                <dt>{t("entryOpens")}</dt>
+                <dd>
+                  {startsAt(ticket.entryWindow.startsAt) ?? t("notStated")}
+                </dd>
+              </div>
+              <div>
+                <dt>{t("entryCloses")}</dt>
+                <dd>{startsAt(ticket.entryWindow.endsAt) ?? t("notStated")}</dd>
+              </div>
+            </>
+          ) : null}
           <div>
             <dt>{t("where")}</dt>
             <dd>{ticket.event.venue ?? t("notStated")}</dd>

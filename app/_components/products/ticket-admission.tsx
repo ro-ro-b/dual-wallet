@@ -17,6 +17,7 @@ import {
   type ExecutorIdentity,
 } from "@/app/_lib/external-face-bridge/core/executor-identity";
 import { useSession } from "@/app/_providers/session-provider";
+import { useTicketTime } from "@/app/_components/products/ticket-time";
 import {
   AdmissionError,
   admissionStatus,
@@ -113,6 +114,10 @@ export function TicketAdmission({
     };
   }, []);
   const where = { slug, launchId, objectId };
+  // The entry window in its own stated offset, as the ticket detail shows it.
+  const ticketTime = useTicketTime();
+  const windowTime = (value: string | null) =>
+    ticketTime(value) ?? t("notStated");
   const time = (value: string | null) =>
     value
       ? format.dateTime(new Date(value), {
@@ -270,6 +275,7 @@ export function TicketAdmission({
         <ConfirmEntry
           confirmation={view.confirmation}
           time={time}
+          windowTime={windowTime}
           onCancel={() => void cancel(view.confirmation.operationId)}
           onConfirm={() => void confirm(view.confirmation, view.custom)}
         />
@@ -348,11 +354,13 @@ export function TicketAdmission({
 function ConfirmEntry({
   confirmation,
   time,
+  windowTime,
   onCancel,
   onConfirm,
 }: {
   confirmation: AdmissionConfirmation;
   time: (value: string | null) => string;
+  windowTime: (value: string | null) => string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -364,7 +372,7 @@ function ConfirmEntry({
     [t("venue"), confirmation.event.venue ?? t("notStated")],
     [
       t("window"),
-      `${time(confirmation.window.startsAt)} – ${time(confirmation.window.endsAt)}`,
+      `${windowTime(confirmation.window.startsAt)} – ${windowTime(confirmation.window.endsAt)}`,
     ],
     [t("request"), confirmation.request.requestId],
     [t("expires"), time(confirmation.expiresAt)],

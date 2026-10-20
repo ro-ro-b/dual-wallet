@@ -88,9 +88,11 @@ beforeEach(() => {
               venue: "Quay Hall",
               startsAt: "2026-10-18T18:00:00.000Z",
             },
+            // The closed template's canonical window, as issued (minute
+            // precision with its own offset).
             window: {
-              startsAt: "2026-10-18T18:00:00.000Z",
-              endsAt: "2026-10-18T23:00:00.000Z",
+              startsAt: "2026-10-20T17:30+11:00",
+              endsAt: "2026-10-20T20:30+11:00",
             },
             holder: HOLDER,
             effect: { from: "Valid", to: "Admitted" },
@@ -167,6 +169,9 @@ it("shows server-read facts natively, starts on Cancel, and Escape cancels with 
     REQUEST,
     HOLDER,
     "This ticket's status changes from Valid to Admitted. Nothing else on the ticket changes.",
+    // The window's own wall clock and offset, never converted to UTC (06:30,
+    // 09:30) or to the machine's zone.
+    "2026-10-20T17:30:00.000Z (UTC+11:00) – 2026-10-20T20:30:00.000Z (UTC+11:00)",
   ]) {
     expect(within(dialog).getByText(fact)).toBeTruthy();
   }

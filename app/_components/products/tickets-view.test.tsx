@@ -8,8 +8,13 @@ jest.mock("next-intl", () => {
   return {
     useTranslations: (namespace: string) => translations(namespace),
     useFormatter: () => ({
-      dateTime: (value: Date, options: { timeZoneName?: string }) =>
-        `formatted:${value.toISOString()}${options.timeZoneName ? ` (${options.timeZoneName} zone)` : ""}`,
+      // Names the zone it was asked to format in, so a test can tell a
+      // ticket's own wall clock from a machine-local conversion.
+      dateTime: (
+        value: Date,
+        options: { timeZone?: string; timeZoneName?: string },
+      ) =>
+        `formatted:${value.toISOString()}${options.timeZone ? ` [${options.timeZone}]` : ""}${options.timeZoneName ? ` (${options.timeZoneName} zone)` : ""}`,
     }),
   };
 });
@@ -313,17 +318,92 @@ describe("a session that ends while paging", () => {
   });
 });
 
+// The value shown for one fact of the ticket detail (its <dt>'s <dd>).
+const fact = (label: string) => {
+  const term = screen.getByText(label, { selector: "dt" });
+  return term.nextElementSibling as HTMLElement;
+};
+
 describe("one ticket", () => {
+  it("shows a ticket's canonical entry window in its own offset, and says plainly that no event start is stated", async () => {
+    // The P4 client ticket's shape (FICTIONAL ids): Studio's map gives no
+    // event start, only the entry window, written at minute precision.
+    fetchMock.mockImplementation(() =>
+      json({
+        ticket: wire({
+          event: {
+            title: "Harbour Night",
+            startsAt: null,
+            venue: "p4-acceptance-venue",
+          },
+          entryClass: "general",
+          entryGuidance: null,
+          entryWindow: {
+            startsAt: "2026-10-20T17:30+11:00",
+            endsAt: "2026-10-20T20:30+11:00",
+            closed: false,
+          },
+        }),
+      }),
+    );
+    view({ objectId: TICKET });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+    expect(within(fact("Event starts")).getByText("Not stated")).toBeTruthy();
+    // 17:30 and 20:30 at +11:00, exactly as written: not converted to UTC
+    // (06:30, 09:30) or to the machine's zone.
+    expect(
+      within(fact("Entry opens")).getByText(
+        "formatted:2026-10-20T17:30:00.000Z [UTC] (UTC+11:00)",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(fact("Entry closes")).getByText(
+        "formatted:2026-10-20T20:30:00.000Z [UTC] (UTC+11:00)",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("When")).toBeNull();
+    expect(screen.getByText("p4-acceptance-venue")).toBeTruthy();
+    expect(screen.getByText("general")).toBeTruthy();
+  });
+
+  it("states an unknown side of the entry window as not stated, never guessed", async () => {
+    fetchMock.mockImplementation(() =>
+      json({
+        ticket: wire({
+          event: { title: "Harbour Night", startsAt: null, venue: "Quay Hall" },
+          entryWindow: {
+            startsAt: "2026-10-20T17:30+11:00",
+            endsAt: null,
+            closed: false,
+          },
+        }),
+      }),
+    );
+    view({ objectId: TICKET });
+    await screen.findByRole("heading", { level: 1, name: "Harbour Night" });
+    expect(within(fact("Event starts")).getByText("Not stated")).toBeTruthy();
+    expect(within(fact("Entry closes")).getByText("Not stated")).toBeTruthy();
+    expect(
+      within(fact("Entry opens")).getByText(
+        "formatted:2026-10-20T17:30:00.000Z [UTC] (UTC+11:00)",
+      ),
+    ).toBeTruthy();
+  });
+
   it("shows the event, class and entry guidance, and says admission is unavailable", async () => {
     fetchMock.mockImplementation(() => json({ ticket: wire() }));
     view({ objectId: TICKET });
     expect(
       await screen.findByRole("heading", { level: 1, name: "Harbour Night" }),
     ).toBeTruthy();
-    // The event time names its time zone rather than leaving it implied.
+    // The event's own start, in its own stated offset (here UTC), named.
     expect(
-      screen.getByText(/formatted:2026-11-20T19:30:00.000Z \(short zone\)/),
+      within(fact("Event starts")).getByText(
+        "formatted:2026-11-20T19:30:00.000Z [UTC] (UTC)",
+      ),
     ).toBeTruthy();
+    // No entry window is stated, so none is shown.
+    expect(screen.queryByText("Entry opens")).toBeNull();
     expect(screen.getByText("Quay Hall")).toBeTruthy();
     expect(screen.getByText("Standing")).toBeTruthy();
     expect(screen.getByText("issue-op-0001")).toBeTruthy();
@@ -519,7 +599,7 @@ describe("why a verified ticket can't be used", () => {
     expect(within(header()).getByText("Issued")).toBeTruthy();
     expect(
       screen.getByText(
-        `The entry window for this ticket closed on formatted:${WINDOW_END} (short zone). Dual still records it as issued, but it can no longer be used to get in.`,
+        `The entry window for this ticket closed on formatted:${WINDOW_END} [UTC] (UTC). Dual still records it as issued, but it can no longer be used to get in.`,
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/expired/i)).toBeNull();

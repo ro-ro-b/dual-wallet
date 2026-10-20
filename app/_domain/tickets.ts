@@ -73,13 +73,20 @@ export interface Ticket {
    */
   endedAs: "cancelled" | "expired" | null;
   /**
-   * The entry window's end, read only for a ticket-admission-v1 binding from
-   * the exact closed ticket template (its `admissionWindowEndsAt`, the
-   * admission leg's own field), and whether it had passed at this read. A
-   * derived fact beside the canonical state, which it never changes: a
-   * closed window is not `Expired`. Null when the wallet cannot verify it.
+   * When entry opens and closes, as the issuer wrote them (never the event's
+   * start). For a ticket-admission-v1 binding both come from the exact closed
+   * ticket template (`admissionWindowStartsAt`, `admissionWindowEndsAt`, the
+   * admission leg's own fields); a P4.2 binding that names
+   * `admissionWindowStartsAt` gives the opening only, since its rules name no
+   * end. `closed` says whether a known end had passed at this read: a derived
+   * fact beside the canonical state, which it never changes (a closed window
+   * is not `Expired`). Null when the wallet can verify neither time.
    */
-  entryWindow: { endsAt: string; closed: boolean } | null;
+  entryWindow: {
+    startsAt: string | null;
+    endsAt: string | null;
+    closed: boolean;
+  } | null;
   /**
    * No Dual state is ever read as entry, whatever the object says; with
    * ticket-admission-v1 entry comes only from the verified admission leg.
@@ -112,8 +119,20 @@ export type TicketEvaluation =
 
 const ISSUE_OPERATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const MAX_TEXT = 500;
+// An instant exactly as the issuer wrote it: a full date, hours and minutes
+// (Studio's canonical form, 2026-10-20T17:30+11:00), optional seconds and
+// fraction, and an explicit offset. Nothing is coerced: no local time, no
+// missing offset, and every part must be in range (see ticketWallClock).
 const ISO_TIME =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|([+-])(\d{2}):(\d{2}))$/;
+
+// The closed ticket template's entry window. By contract these are when entry
+// opens and closes, never the event's start: a binding that names one of them
+// as `startsAt` gets no event start, and the time is shown as the window.
+const ENTRY_WINDOW_KEYS: readonly string[] = [
+  "admissionWindowStartsAt",
+  "admissionWindowEndsAt",
+];
 
 function valueAt(custom: Record<string, unknown>, path: string): unknown {
   let current: unknown = custom;
@@ -139,12 +158,50 @@ export function ticketText(value: unknown, max = MAX_TEXT): string | null {
   return text;
 }
 
+/** A ticket time's wall clock in its own stated offset, never the viewer's. */
+export interface TicketWallClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  /** "Z", or the offset exactly as written ("+11:00"). */
+  offset: string;
+}
+
+/**
+ * The wall clock of a ticket time, or null when the value is not one: the
+ * strict form above with every part in range (a real calendar day, 00:00 to
+ * 23:59, an offset within +/-14:00).
+ */
+export function ticketWallClock(value: unknown): TicketWallClock | null {
+  if (typeof value !== "string") return null;
+  const match = ISO_TIME.exec(value);
+  if (!match) return null;
+  const [year, month, day, hour, minute] = match.slice(1, 6).map(Number);
+  const second = match[6] === undefined ? 0 : Number(match[6]);
+  const offsetHours = match[8] ? Number(match[9]) : 0;
+  const offsetMinutes = match[8] ? Number(match[10]) : 0;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetMinutes > 59 ||
+    offsetHours * 60 + offsetMinutes > 14 * 60 ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    return null;
+  }
+  return { year, month, day, hour, minute, offset: match[7] };
+}
+
 function ticketTime(value: unknown): string | null {
-  return typeof value === "string" &&
-    ISO_TIME.test(value) &&
-    Number.isFinite(Date.parse(value))
-    ? value
-    : null;
+  return ticketWallClock(value) ? (value as string) : null;
 }
 
 function statusOf(
@@ -180,10 +237,11 @@ function endedAsOf(state: unknown, status: TicketStatus) {
 }
 
 /**
- * The verified entry window, or null. Only the admission contract fixes where
- * the window's end is kept: the exact closed ticket template (no more, no
- * fewer keys) and its `admissionWindowEndsAt`. P4.2 rules name no end, and a
- * start time says nothing about it.
+ * The entry window, or null. The admission contract fixes where it is kept:
+ * the exact closed ticket template (no more, no fewer keys), its
+ * `admissionWindowStartsAt` and `admissionWindowEndsAt`. A P4.2 binding that
+ * names `admissionWindowStartsAt` as its start gives the opening only (its
+ * rules name no end). A window that ends before it opens is not shown.
  */
 function entryWindowOf(
   custom: Record<string, unknown>,
@@ -192,15 +250,27 @@ function entryWindowOf(
 ): Ticket["entryWindow"] {
   const keys = rules.admission ? [...rules.admission.customKeys].sort() : [];
   const present = Object.keys(custom).sort();
-  if (
-    !keys.length ||
-    present.length !== keys.length ||
-    present.some((key, index) => key !== keys[index])
-  ) {
+  const closedTemplate =
+    keys.length > 0 &&
+    present.length === keys.length &&
+    present.every((key, index) => key === keys[index]);
+  let startsAt: string | null = null;
+  let endsAt: string | null = null;
+  if (closedTemplate) {
+    startsAt = ticketTime(custom.admissionWindowStartsAt);
+    endsAt = ticketTime(custom.admissionWindowEndsAt);
+  } else if (rules.fields.startsAt === "admissionWindowStartsAt") {
+    startsAt = ticketTime(valueAt(custom, "admissionWindowStartsAt"));
+  }
+  if (startsAt === null && endsAt === null) return null;
+  if (startsAt && endsAt && Date.parse(endsAt) <= Date.parse(startsAt)) {
     return null;
   }
-  const endsAt = ticketTime(custom.admissionWindowEndsAt);
-  return endsAt ? { endsAt, closed: Date.parse(endsAt) <= now } : null;
+  return {
+    startsAt,
+    endsAt,
+    closed: endsAt !== null && Date.parse(endsAt) <= now,
+  };
 }
 
 /**
@@ -252,7 +322,11 @@ export function evaluateTicket(
         title:
           ticketText(valueAt(source.custom, fields.event), 120) ??
           name.slice(0, 120),
-        startsAt: ticketTime(optional(fields.startsAt)),
+        startsAt:
+          fields.startsAt !== null &&
+          ENTRY_WINDOW_KEYS.includes(fields.startsAt)
+            ? null
+            : ticketTime(optional(fields.startsAt)),
         venue: ticketText(optional(fields.venue), 120),
       },
       entryClass: ticketText(optional(fields.entryClass), 80),
@@ -347,14 +421,32 @@ export function parseTicket(value: unknown): Ticket | undefined {
   // Added later: an older server's ticket has neither key, read as null.
   const endedAs = value.endedAs ?? null;
   const window = value.entryWindow ?? null;
+  const windowTime = (time: unknown) =>
+    time === null ? null : (ticketTime(time) ?? undefined);
+  // An older server's window carried only its end ({ endsAt, closed }).
+  const windowKeys = record(window) ? Object.keys(window).sort().join() : "";
+  const legacyWindow = windowKeys === "closed,endsAt";
+  const windowStartsAt = !record(window)
+    ? undefined
+    : legacyWindow
+      ? null
+      : windowTime(window.startsAt);
+  const windowEndsAt = record(window) ? windowTime(window.endsAt) : undefined;
   const entryWindow =
     window === null
       ? null
       : record(window) &&
-          Object.keys(window).length === 2 &&
+          (legacyWindow || windowKeys === "closed,endsAt,startsAt") &&
+          windowStartsAt !== undefined &&
+          windowEndsAt !== undefined &&
+          (windowStartsAt !== null || windowEndsAt !== null) &&
           typeof window.closed === "boolean" &&
-          ticketTime(window.endsAt) !== null
-        ? { endsAt: window.endsAt as string, closed: window.closed }
+          (window.closed === false || windowEndsAt !== null)
+        ? {
+            startsAt: windowStartsAt,
+            endsAt: windowEndsAt,
+            closed: window.closed,
+          }
         : undefined;
   if (
     typeof value.objectId !== "string" ||

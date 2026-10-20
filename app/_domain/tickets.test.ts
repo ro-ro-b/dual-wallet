@@ -9,6 +9,7 @@ import {
   parseTicket,
   parseTicketPage,
   ticketText,
+  ticketWallClock,
   type TicketRules,
   type TicketSource,
 } from "@/app/_domain/tickets";
@@ -369,22 +370,43 @@ describe("why a verified ticket can't be used", () => {
     );
   });
 
-  it("knows no entry window without the admission contract's closed template and a valid end time", () => {
-    // P4.2 rules name no window end: nothing is derived from the start.
+  it("knows no window end without the admission contract's closed template and a valid end time", () => {
+    // Studio's map names admissionWindowStartsAt as its start: that is when
+    // entry opens, never the event's start. P4.2 rules name no window end, so
+    // nothing about closing is derived from it.
+    const opening = {
+      startsAt: "2026-10-19T08:00:00Z",
+      endsAt: null,
+      closed: false,
+    };
     expect(read(closedTemplate("Valid"), studio)).toMatchObject({
       status: "issued",
-      entryWindow: null,
+      event: { startsAt: null },
+      entryWindow: opening,
     });
-    // Not exactly the closed template: no verified window.
+    // Not exactly the closed template: no verified end.
     expect(read({ ...closedTemplate("Valid"), extra: "x" })).toMatchObject({
-      entryWindow: null,
+      entryWindow: opening,
     });
     const missing: Record<string, unknown> = closedTemplate("Valid");
     delete missing.admissionWindowEndsAt;
-    expect(read(missing)).toMatchObject({ entryWindow: null });
+    expect(read(missing)).toMatchObject({ entryWindow: opening });
     expect(read(closedTemplate("Valid", "after the show"))).toMatchObject({
-      entryWindow: null,
+      entryWindow: opening,
     });
+    // Neither time readable: no window at all.
+    expect(
+      read({
+        ...closedTemplate("Valid", "after the show"),
+        admissionWindowStartsAt: "doors",
+      }),
+    ).toMatchObject({ event: { startsAt: null }, entryWindow: null });
+    // A window that closes before it opens is not shown.
+    expect(read(closedTemplate("Valid", "2026-10-19T07:59:00Z"))).toMatchObject(
+      {
+        entryWindow: null,
+      },
+    );
   });
 
   it("round-trips through the browser's parser, which refuses an inconsistent or malformed claim", () => {
@@ -408,9 +430,33 @@ describe("why a verified ticket can't be used", () => {
           reason: "x",
         },
       },
+      { entryWindow: { startsAt: null, endsAt: null, closed: false } },
+      { entryWindow: { startsAt: "doors", endsAt: null, closed: false } },
+      // A closed window needs its end.
+      {
+        entryWindow: {
+          startsAt: "2026-10-19T08:00:00Z",
+          endsAt: null,
+          closed: true,
+        },
+      },
+      {
+        entryWindow: {
+          startsAt: "2026-10-19T08:00",
+          endsAt: null,
+          closed: false,
+        },
+      },
     ]) {
       expect(parseTicket({ ...valid, ...change })).toBeUndefined();
     }
+    // An older server's window, with its end only, still reads.
+    expect(
+      parseTicket({
+        ...valid,
+        entryWindow: { endsAt: "2026-10-19T11:00:00Z", closed: true },
+      })?.entryWindow,
+    ).toEqual({ startsAt: null, endsAt: "2026-10-19T11:00:00Z", closed: true });
     // An older server's ticket, without the new keys, still reads.
     const { endedAs, entryWindow, ...older } = valid;
     void endedAs;
@@ -419,5 +465,207 @@ describe("why a verified ticket can't be used", () => {
       endedAs: null,
       entryWindow: null,
     });
+  });
+});
+
+describe("the issued ticket's own schedule", () => {
+  // The P4 client ticket's canonical shape (FICTIONAL ids): Studio's closed
+  // ticket template, minute-precision times with their offset, and Studio's
+  // field map, whose `startsAt` is the entry window's opening.
+  const admission = parseAdmissionRules({
+    contract: "ticket-admission-v1",
+    action: "update",
+    inputPath: "data.custom",
+    leaves: {
+      state: { enum: ["Admitted"] },
+      admissionStatus: { enum: ["Admitted"] },
+      operation_id: { runtimeIssued: "^op_[0-9a-f]{40}$" },
+      idempotency_key: { runtimeIssued: "^tig:dual-operation:[0-9a-f]{64}$" },
+    },
+    customKeys: [...ADMISSION_CUSTOM_KEYS],
+    fromStates: ["Valid"],
+    targetStates: ["Admitted"],
+    preserveUnlisted: true,
+  })!;
+  const studio: TicketRules = {
+    fields: {
+      event: "title",
+      startsAt: "admissionWindowStartsAt",
+      venue: "venueRef",
+      entryClass: "accessClass",
+      entryGuidance: null,
+      issueOperation: "operation_id",
+      state: "state",
+    },
+    states: { pending: [], issued: ["Valid"], ended: ["Cancelled", "Expired"] },
+    admission,
+  };
+  const issued = Object.fromEntries(
+    ADMISSION_CUSTOM_KEYS.map((key) => [key, ""]).concat([
+      ["title", "P4 acceptance event"],
+      ["state", "Valid"],
+      ["admissionStatus", "Valid"],
+      ["eventRef", "P4-20261020"],
+      ["venueRef", "p4-acceptance-venue"],
+      ["accessClass", "general"],
+      ["operation_id", `op_${"b".repeat(40)}`],
+      ["admissionWindowStartsAt", "2026-10-20T17:30+11:00"],
+      ["admissionWindowEndsAt", "2026-10-20T20:30+11:00"],
+    ]),
+  );
+  const at = (now: string, custom = issued, rules = studio) => {
+    const evaluated = evaluateTicket(source({ custom }), {
+      ...context,
+      rules,
+      now: Date.parse(now),
+    });
+    if (!evaluated.ok) throw new Error(evaluated.refusal);
+    return evaluated.ticket;
+  };
+
+  it("shows the canonical entry window as written and states no event start it does not have", () => {
+    const ticket = at("2026-10-19T12:00:00Z");
+    expect(ticket).toMatchObject({
+      status: "issued",
+      event: {
+        title: "P4 acceptance event",
+        startsAt: null,
+        venue: "p4-acceptance-venue",
+      },
+      entryClass: "general",
+      entryWindow: {
+        startsAt: "2026-10-20T17:30+11:00",
+        endsAt: "2026-10-20T20:30+11:00",
+        closed: false,
+      },
+    });
+    expect(parseTicket(JSON.parse(JSON.stringify(ticket)))).toEqual(ticket);
+  });
+
+  it("closes the window at its own offset's instant, not a machine-local one", () => {
+    // 20:30 at +11:00 is 09:30 UTC.
+    expect(at("2026-10-20T09:29:59Z").entryWindow?.closed).toBe(false);
+    expect(at("2026-10-20T09:30:00Z").entryWindow?.closed).toBe(true);
+    expect(at("2026-10-20T09:30:00+00:00").entryWindow?.closed).toBe(true);
+  });
+
+  it("reads a ticket time strictly: minute or second precision with an explicit offset, every part in range", () => {
+    expect(ticketWallClock("2026-10-20T17:30+11:00")).toEqual({
+      year: 2026,
+      month: 10,
+      day: 20,
+      hour: 17,
+      minute: 30,
+      offset: "+11:00",
+    });
+    expect(ticketWallClock("2026-10-20T17:30:45.5-03:30")).toEqual({
+      year: 2026,
+      month: 10,
+      day: 20,
+      hour: 17,
+      minute: 30,
+      offset: "-03:30",
+    });
+    expect(ticketWallClock("2028-02-29T00:00Z")).toEqual({
+      year: 2028,
+      month: 2,
+      day: 29,
+      hour: 0,
+      minute: 0,
+      offset: "Z",
+    });
+    for (const value of [
+      "2026-10-20T17:30", // no offset: a machine-local time
+      "2026-10-20 17:30+11:00",
+      "2026-10-20T17+11:00",
+      "2026-10-20T17:30+1100",
+      "20261020T1730+1100",
+      "2026-02-29T17:30+11:00",
+      "2026-04-31T17:30+11:00",
+      "2026-13-01T17:30+11:00",
+      "2026-10-20T24:00+11:00",
+      "2026-10-20T17:60+11:00",
+      "2026-10-20T17:30:60+11:00",
+      "2026-10-20T17:30+14:30",
+      "2026-10-20T17:30+11:60",
+      " 2026-10-20T17:30+11:00",
+      "2026-10-20",
+      "",
+      1792390200000,
+      null,
+    ]) {
+      expect(ticketWallClock(value)).toBeNull();
+    }
+  });
+
+  it("is honest about a missing or malformed window: each missing side is unstated, never guessed", () => {
+    const without = (changes: Record<string, unknown>) => ({
+      ...issued,
+      ...changes,
+    });
+    expect(
+      at(
+        "2026-10-19T12:00:00Z",
+        without({ admissionWindowEndsAt: "2026-10-20T20:30" }),
+      ).entryWindow,
+    ).toEqual({
+      startsAt: "2026-10-20T17:30+11:00",
+      endsAt: null,
+      closed: false,
+    });
+    expect(
+      at("2026-10-19T12:00:00Z", without({ admissionWindowStartsAt: "" }))
+        .entryWindow,
+    ).toEqual({
+      startsAt: null,
+      endsAt: "2026-10-20T20:30+11:00",
+      closed: false,
+    });
+    expect(
+      at(
+        "2026-10-19T12:00:00Z",
+        without({
+          admissionWindowStartsAt: "soon",
+          admissionWindowEndsAt: "later",
+        }),
+      ).entryWindow,
+    ).toBeNull();
+    // A binding naming the window's end as its start gets no event start either.
+    expect(
+      at("2026-10-19T12:00:00Z", issued, {
+        ...studio,
+        fields: { ...studio.fields, startsAt: "admissionWindowEndsAt" },
+      }).event.startsAt,
+    ).toBeNull();
+  });
+
+  it("keeps an explicit event start exactly as before, in either precision, with no window invented", () => {
+    const explicit: TicketRules = {
+      ...RULES,
+      fields: { ...RULES.fields, startsAt: "event.starts_at" },
+    };
+    for (const startsAt of ["2026-11-20T19:30:00Z", "2026-11-20T19:30+11:00"]) {
+      const ticket = at(
+        "2026-10-19T12:00:00Z",
+        {
+          event: { title: "Show", starts_at: startsAt },
+          issue: { op: "op-0001" },
+          state: "Issued",
+        },
+        explicit,
+      );
+      expect(ticket.event.startsAt).toBe(startsAt);
+      expect(ticket.entryWindow).toBeNull();
+    }
+    const malformed = at(
+      "2026-10-19T12:00:00Z",
+      {
+        event: { title: "Show", starts_at: "8pm" },
+        issue: { op: "op-0001" },
+        state: "Issued",
+      },
+      explicit,
+    );
+    expect(malformed.event.startsAt).toBeNull();
   });
 });

@@ -601,10 +601,13 @@ describe("an authorised holder admits their own ticket", () => {
       expect.objectContaining({
         objectId: TICKET,
         holder: HOLDER.toLowerCase(),
+        // Studio's map names the entry window's opening as `startsAt`: that is
+        // the window below, never the event's start, which this ticket does
+        // not state.
         event: {
           title: "Harbour Night",
           venue: "Quay Hall",
-          startsAt: "2026-10-18T18:00:00.000Z",
+          startsAt: null,
         },
         window: {
           startsAt: "2026-10-18T18:00:00.000Z",
