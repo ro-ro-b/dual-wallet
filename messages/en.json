@@ -848,7 +848,7 @@
       "active": "You're a member.",
       "held": "Your membership is on hold. Activities can't be recorded until the programme team reinstates it.",
       "ended": "Your membership has ended.",
-      "unconfirmed": "Your membership can't be confirmed right now. Nothing has been changed."
+      "unconfirmed": "Your membership can't be confirmed right now. Check again shortly."
     },
     "submission": {
       "unchecked": "Not checked on this page yet.",
@@ -920,7 +920,7 @@
         "restored": "The partner couldn't hand this over, so your reward is kept for you. Request it again when you're ready.",
         "settled": "Handed over, and the programme recorded the partner settlement.",
         "not_redeemable": "This reward can't be redeemed here after a later change. Contact the programme team.",
-        "unconfirmed": "This reward can't be confirmed right now. Nothing has been changed."
+        "unconfirmed": "This reward can't be confirmed right now. Check again shortly."
       },
       "availability": {
         "available": "Available now (programme record).",
@@ -950,7 +950,7 @@
       "failedHandovers": "Earlier handovers that didn't happen: {count}. Your reward was kept each time.",
       "settlementNote": "Settlement is the programme's record with the partner. It isn't a payment to you.",
       "heldNote": "Your membership is on hold. The programme team decides what happens to this reward.",
-      "unconfirmedAll": "Your benefits can't be confirmed right now. Nothing has been changed.",
+      "unconfirmedAll": "Your benefits can't be confirmed right now. Check again shortly.",
       "unavailable": "We couldn't check your benefits right now.",
       "retry": "Try again",
       "requestsTitle": "Redemption requests from this wallet",
